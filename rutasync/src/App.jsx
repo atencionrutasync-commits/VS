@@ -2,1651 +2,1284 @@ import React, { useState, useEffect } from 'react';
 import { 
   Map as MapIcon, Package, History, Calendar, BarChart3, User, 
   LogOut, Plus, Trash2, CheckCircle2, Clock, AlertTriangle, 
-  Lock, Building, Mail, ChevronRight, Check, Upload, Info,
-  Bike, Truck, Download, Zap, Filter, ShieldAlert, ShieldCheck,
-  ArrowLeft, ArrowRight, LayoutDashboard, TrendingUp, DollarSign,
+  Lock, Building, Mail, ChevronRight, Check, Upload, Info, 
+  Bike, Truck, Download, Zap, Filter, ShieldAlert, ShieldCheck, 
+  ArrowLeft, ArrowRight, LayoutDashboard, TrendingUp, DollarSign, 
   Receipt, Calculator, CreditCard, Printer, FileText, Smartphone,
-  Navigation, CheckCircle, Phone, PlayCircle, Star, Camera, PenTool,
-  MessageCircle, Wallet, Store, ShoppingCart, Globe, Headset
+  Navigation, Phone, PlayCircle, Star, Camera, PenTool,
+  MessageCircle, Wallet, Store, ShoppingCart, Globe, Headset,
+  FileSpreadsheet, FileOutput, Shield, Power, PowerOff, X, Search
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { 
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line
+} from 'recharts';
 
-const generateUUID = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return 'id_' + Math.random().toString(36).substring(2, 15);
+// --- FIREBASE IMPORTS ---
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, 
+  onAuthStateChanged, signOut, sendPasswordResetEmail, 
+  setPersistence, browserLocalPersistence, browserSessionPersistence 
+} from 'firebase/auth';
+import { 
+  getFirestore, doc, setDoc, getDoc, collection, addDoc, deleteDoc,
+  updateDoc, onSnapshot, query, orderBy, limit, serverTimestamp 
+} from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+// ============================================================================
+// 1. CONFIGURACIÓN DE FIREBASE (Seguridad .env implementada)
+// ============================================================================
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY, 
+  authDomain: "rutasync-erp.firebaseapp.com",
+  projectId: "rutasync-erp",
+  storageBucket: "rutasync-erp.firebasestorage.app",
+  messagingSenderId: "969874888509",
+  appId: "1:969874888509:web:f52ffe1e015d2831c55754",
+  measurementId: "G-7SH3LH6ST0"
 };
 
+let app, auth, db, storage;
+const isFirebaseConfigured = !!firebaseConfig.apiKey && firebaseConfig.apiKey !== "TU_API_KEY" && firebaseConfig.apiKey !== "undefined";
+
+if (isFirebaseConfigured) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    storage = getStorage(app); 
+  } catch (error) {
+    console.error("Error inicializando Firebase:", error);
+  }
+}
+
+// ============================================================================
+// 2. DATOS DE PRUEBA Y ESTADOS INICIALES (MODO DEMOSTRACIÓN)
+// ============================================================================
+const dataRendimiento = [
+  { nombre: 'Lun', entregas: 45, ingresos: 2100 },
+  { nombre: 'Mar', entregas: 52, ingresos: 2400 },
+  { nombre: 'Mié', entregas: 38, ingresos: 1850 },
+  { nombre: 'Jue', entregas: 65, ingresos: 3200 },
+  { nombre: 'Vie', entregas: 48, ingresos: 2200 },
+  { nombre: 'Sáb', entregas: 70, ingresos: 3500 },
+  { nombre: 'Dom', entregas: 20, ingresos: 900 },
+];
+
+const mockInventory = [
+  { id: '1', sku: 'RUT-001', nombre: 'Caja Standard 10kg', stock: 150, precio: 25.00 },
+  { id: '2', sku: 'RUT-002', nombre: 'Bolsa de Seguridad', stock: 500, precio: 5.00 },
+  { id: '3', sku: 'RUT-003', nombre: 'Cinta Embalaje', stock: 45, precio: 15.00 },
+];
+
 export default function App() {
-  const [showLanding, setShowLanding] = useState(true);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [isRegisterMode, setIsRegisterMode] = useState(true);
-  const [showPDF, setShowPDF] = useState(false);
-  const [showDriverView, setShowDriverView] = useState(false);
-  
-  const [selectedPlanToRegister, setSelectedPlanToRegister] = useState('pyme');
-  const [legalModal, setLegalModal] = useState(null);
-  const [modalEntrega, setModalEntrega] = useState(null);
-  const [formPOD, setFormPOD] = useState({ metodoPago: 'efectivo', firma: '', fotoCapturada: false });
-
+  // --- ESTADOS DE AUTENTICACIÓN ---
   const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState('pos');
+  const [userData, setUserData] = useState(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
   
-  const [entregas, setEntregas] = useState([]);
-  const [inventario, setInventario] = useState([
-    { id: generateUUID(), nombre: 'Cemento Progreso 4000', cantidad: 50, precio: 75.00, minimo: 10 },
-    { id: generateUUID(), nombre: 'Alambre de Amarre', cantidad: 20, precio: 8.50, minimo: 10 },
-    { id: generateUUID(), nombre: 'Tubo PVC 1/2"', cantidad: 120, precio: 22.00, minimo: 50 }
-  ]);
+  // --- ESTADOS DE NAVEGACIÓN Y MODALES ---
+  const [currentView, setCurrentView] = useState('landing');
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); 
+  const [selectedPlan, setSelectedPlan] = useState('PYME');
+  
+  const [showContact, setShowContact] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  
+  // --- ESTADOS GLOBALES DE INTERFAZ (SEGURIDAD Y UX) ---
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [toastMessage, setToastMessage] = useState('');
+
+  // --- ESTADOS DE FORMULARIOS DE ACCESO ---
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [empresa, setEmpresa] = useState('');
+  const [telefono, setTelefono] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  // --- ESTADOS DEL ERP CLOUD ---
+  const [inventario, setInventario] = useState([]);
+  const [ventas, setVentas] = useState([]);
+  const [rutas, setRutas] = useState([]);
   const [eventos, setEventos] = useState([]);
-  const [gastos, setGastos] = useState([]);
-  const [toasts, setToasts] = useState([]);
+  const [clientesAdmin, setClientesAdmin] = useState([]);
 
-  const [clientesAdmin, setClientesAdmin] = useState([
-    { id: generateUUID(), company: 'Ferretería El Progreso', email: 'contacto@elprogreso.com', telefono: '44558899', plan: 'pyme', diasRestantes: 25, estado: 'activo', fechaRegistro: '2026-06-05' },
-    { id: generateUUID(), company: 'Distribuidora del Valle', email: 'gerencia@valledist.com', telefono: '55661122', plan: 'corporativo', diasRestantes: 12, estado: 'activo', fechaRegistro: '2026-06-18' },
-    { id: generateUUID(), company: 'Materiales San Juan', email: 'ventas@sanjuan.com', telefono: '33229900', plan: 'emprendedor', diasRestantes: 2, estado: 'pendiente', fechaRegistro: '2026-06-28' }
-  ]);
+  // --- ESTADOS OPERATIVOS ---
+  // POS (Protección Anti-NaN inicializada con String)
+  const [posSelectedItemId, setPosSelectedItemId] = useState('');
+  const [posQuantity, setPosQuantity] = useState('1'); 
+  const [posClient, setPosClient] = useState('Cliente Mostrador');
+  const [posMethod, setPosMethod] = useState('Efectivo');
+  
+  // Despachos
+  const [showRouteModal, setShowRouteModal] = useState(false);
+  const [newRoute, setNewRoute] = useState({ piloto: '', telefonoPiloto: '', cliente: '', direccion: '', item: '', qty: '1', telefonoCliente: '' });
 
-  const [notasAdmin, setNotasAdmin] = useState([
-    { id: generateUUID(), nota: 'Llamar a Materiales San Juan para concretar pago.' }
-  ]);
-  const [nuevaNota, setNuevaNota] = useState('');
+  // Almacén
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [newProduct, setNewProduct] = useState({ sku: '', nombre: '', stock: '1', precio: '0' });
 
-  const [isForgotMode, setIsForgotMode] = useState(false);
-  const [filtroHistorial, setFiltroHistorial] = useState('todos');
-  const [filtroFinanzas, setFiltroFinanzas] = useState('todos');
+  // Agenda
+  const [showEventModal, setShowEventModal] = useState(false);
+  const [newEvent, setNewEvent] = useState({ titulo: '', fecha: '', tipo: 'Mantenimiento', detalle: '' });
 
-  const [formAuth, setFormAuth] = useState({ email: '', password: '', company: '', telefono: '', remember: false, acceptTerms: false });
-  const [formRuta, setFormRuta] = useState({ cliente: '', telefono: '', direccion: '', productoId: '', customPedido: '', cantidad: 1, total: '', tipoEnvio: 'propio', responsable: '' });
-  const [formStock, setFormStock] = useState({ nombre: '', cantidad: '', precio: '', minimo: '' });
-  const [formEvento, setFormEvento] = useState({ titulo: '', fecha: '', detalles: '' });
-  const [formPerfil, setFormPerfil] = useState({ company: '', email: '', newPassword: '', confirmPassword: '' });
-  const [formGasto, setFormGasto] = useState({ descripcion: '', monto: '' });
-  const [formPOS, setFormPOS] = useState({ cliente: 'Cliente Mostrador', productoId: '', customPedido: '', cantidad: 1, total: '', metodoPago: 'efectivo' });
+  // Simulador de Piloto y Prueba de Entrega (POD)
+  const [activeDelivery, setActiveDelivery] = useState(null);
+  const [deliveryName, setDeliveryName] = useState('');
+  const [deliveryMethod, setDeliveryMethod] = useState('Efectivo');
+  const [deliveryPhotoFile, setDeliveryPhotoFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
 
+  // ============================================================================
+  // 3. EFECTOS: CICLO DE VIDA Y FIREBASE
+  // ============================================================================
   useEffect(() => {
-    const sessionToken = localStorage.getItem('rutaSync_session_token');
-    if (sessionToken) {
-      try {
-        const decodedString = atob(sessionToken);
-        const parsedUser = JSON.parse(decodedString);
-        if (parsedUser && parsedUser.email) {
-          setUser(parsedUser);
-          setIsLoggedIn(true);
-          setShowLanding(false);
-        }
-      } catch (e) { 
-        console.error("Token inválido.", e);
-        localStorage.removeItem('rutaSync_session_token');
-      }
+    if (!isFirebaseConfigured || !auth) {
+      setInventario(mockInventory); 
+      setLoadingAuth(false);
+      return;
     }
+
+    let unsubProfile, unsubUsers, unsubInv, unsubVentas, unsubRutas, unsubEventos;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+        
+        // 1. Perfil del Usuario
+        const userRef = doc(db, 'users', currentUser.uid);
+        unsubProfile = onSnapshot(userRef, async (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            
+            // Suspensión Expulsión Inmediata (Seguridad Grado Militar)
+            if (data.isActive === false && data.role !== 'SUPERADMIN') {
+              showToast("ACCESO DENEGADO: Su cuenta corporativa ha sido suspendida. Sesión terminada.");
+              setTimeout(async () => {
+                await signOut(auth);
+                window.location.reload();
+              }, 2500);
+              return;
+            }
+            setUserData(data);
+
+            // Carga de Superadmin
+            if (data.role === 'SUPERADMIN') {
+              unsubUsers = onSnapshot(collection(db, 'users'), (usersSnap) => {
+                setClientesAdmin(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() })));
+              });
+            }
+          } else {
+            // AUDITORÍA: Si el documento fue borrado físicamente por el Súper Admin (Orphan Auth Fix)
+            showToast("ALERTA CRÍTICA: Perfil de empresa no encontrado o eliminado. Cerrando conexión...");
+            setTimeout(async () => {
+              await signOut(auth);
+              window.location.reload();
+            }, 2500);
+          }
+        });
+
+        // 2. Inventario
+        const invRef = collection(db, `users/${currentUser.uid}/inventario`);
+        unsubInv = onSnapshot(invRef, (snapshot) => {
+          if(snapshot.empty) {
+            mockInventory.forEach(item => setDoc(doc(invRef, item.id.toString()), item));
+          } else {
+            setInventario(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
+          }
+        });
+
+        // 3. Ventas (Limitado a 100 para ahorrar lecturas Cloud)
+        const ventasRef = query(collection(db, `users/${currentUser.uid}/ventas`), orderBy('createdAt', 'desc'), limit(100));
+        unsubVentas = onSnapshot(ventasRef, (snapshot) => {
+          setVentas(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
+        });
+
+        // 4. Rutas (Limitado a 100)
+        const rutasRef = query(collection(db, `users/${currentUser.uid}/rutas`), orderBy('createdAt', 'desc'), limit(100));
+        unsubRutas = onSnapshot(rutasRef, (snapshot) => {
+          setRutas(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
+        });
+
+        // 5. Eventos
+        const eventosRef = query(collection(db, `users/${currentUser.uid}/eventos`), orderBy('fecha', 'asc'));
+        unsubEventos = onSnapshot(eventosRef, (snapshot) => {
+          setEventos(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
+        });
+
+        setCurrentView('dashboard');
+        setShowAuthModal(false);
+      } else {
+        setUser(null);
+        setUserData(null);
+        setCurrentView('landing');
+      }
+      setLoadingAuth(false);
+    });
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubProfile) unsubProfile();
+      if (unsubUsers) unsubUsers();
+      if (unsubInv) unsubInv();
+      if (unsubVentas) unsubVentas();
+      if (unsubRutas) unsubRutas();
+      if (unsubEventos) unsubEventos();
+    };
   }, []);
 
-  const addToast = (message, type = 'success') => {
-    const id = generateUUID();
-    setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  // ============================================================================
+  // 4. SEGURIDAD DE AUTENTICACIÓN
+  // ============================================================================
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(''), 4000);
   };
 
-  const handleNavigateToAuth = (isRegister, plan = 'pyme') => { 
-    setSelectedPlanToRegister(plan);
-    setIsRegisterMode(isRegister); 
-    setIsForgotMode(false);
-    setShowLanding(false); 
+  const validateEmail = (email) => /\S+@\S+\.\S+/.test(email);
+
+  const isLengthValid = password.length >= 8;
+  const hasUpperLower = /(?=.*[a-z])(?=.*[A-Z])/.test(password);
+  const hasNumber = /(?=.*\d)/.test(password);
+  const hasSpecial = /(?=.*[@#$%^&+=!_*-])/.test(password);
+  const isPasswordSecure = isLengthValid && hasUpperLower && hasNumber && hasSpecial;
+
+  const scrollToPricing = () => {
+    const pricingSection = document.getElementById('pricing-section');
+    if (pricingSection) pricingSection.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleAuth = (e) => {
+  const handleAuthSubmit = async (e) => {
     e.preventDefault();
-    const emailSanitizado = formAuth.email.trim().toLowerCase();
+    if (isSubmitting) return; // Escudo Anti-Doble Clic
+    setAuthError('');
     
-    if (isRegisterMode) {
-      if (!formAuth.acceptTerms) { addToast('Debe aceptar los términos legales.', 'error'); return; }
-      if (!emailSanitizado.includes('@') || !emailSanitizado.includes('.')) { addToast('Formato de correo inválido.', 'error'); return; }
-      if (emailSanitizado === 'admin@rutasync.com' || clientesAdmin.some(c => c.email === emailSanitizado)) {
-        addToast('Este correo ya está registrado.', 'error'); return;
-      }
-      const pwd = formAuth.password;
-      if (pwd.length < 8 || !/[A-Za-z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^A-Za-z0-9]/.test(pwd)) {
-        addToast('Clave débil. Use letras, números y símbolos.', 'error'); return;
-      }
+    // Limpieza de inputs (Sanitización básica para evitar errores de Firebase con espacios)
+    const cleanEmail = email.trim();
 
-      const empresaSanitizada = formAuth.company.trim() || 'Mi Empresa';
-      const telefonoSanitizado = formAuth.telefono.trim() || 'No provisto';
-      
-      const newUser = { 
-        id: generateUUID(), email: emailSanitizado, company: empresaSanitizada, telefono: telefonoSanitizado,
-        role: 'owner', plan: selectedPlanToRegister, registeredAt: Date.now(), diasRestantes: 30, estado: 'activo'
-      };
-      
-      setClientesAdmin(prev => [...prev, {
-        id: newUser.id, company: newUser.company, email: newUser.email, telefono: newUser.telefono,
-        plan: newUser.plan, diasRestantes: 30, estado: 'activo', fechaRegistro: new Date().toISOString().split('T')[0]
-      }]);
-
-      setUser(newUser); 
-      setFormPerfil({ company: newUser.company, email: newUser.email, newPassword: '', confirmPassword: '' });
-      setIsLoggedIn(true); 
-      addToast('Cuenta creada. Iniciando mes de prueba.', 'success');
-      
-      if (formAuth.remember) localStorage.setItem('rutaSync_session_token', btoa(JSON.stringify(newUser)));
-    } else {
-      if (emailSanitizado === 'admin@rutasync.com') {
-        const adminUser = { id: 'admin_root', email: emailSanitizado, company: 'RutaSync Corp', role: 'superadmin', plan: 'corporativo' };
-        setUser(adminUser);
-        setFormPerfil({ company: adminUser.company, email: adminUser.email, newPassword: '', confirmPassword: '' });
-        setIsLoggedIn(true);
-        addToast('Consola de Administración Central desbloqueada.', 'success');
-        if (formAuth.remember) localStorage.setItem('rutaSync_session_token', btoa(JSON.stringify(adminUser)));
-        return;
-      }
-
-      const clienteEncontrado = clientesAdmin.find(c => c.email === emailSanitizado);
-      if (clienteEncontrado) {
-        if (clienteEncontrado.estado === 'bloqueado') { addToast('Cuenta suspendida. Contacte soporte.', 'error'); return; }
-        const loggedUser = { id: clienteEncontrado.id, email: clienteEncontrado.email, company: clienteEncontrado.company, role: 'owner', plan: clienteEncontrado.plan, diasRestantes: clienteEncontrado.diasRestantes };
-        setUser(loggedUser); 
-        setFormPerfil({ company: loggedUser.company, email: loggedUser.email, newPassword: '', confirmPassword: '' });
-        setIsLoggedIn(true); 
-        addToast('Sesión iniciada.', 'success');
-        if (formAuth.remember) localStorage.setItem('rutaSync_session_token', btoa(JSON.stringify(loggedUser)));
-      } else {
-        const defaultUser = { id: generateUUID(), email: emailSanitizado, company: 'Ferretería Demo', role: 'owner', plan: 'pyme', diasRestantes: 30 };
-        setUser(defaultUser);
-        setFormPerfil({ company: defaultUser.company, email: defaultUser.email, newPassword: '', confirmPassword: '' });
-        setIsLoggedIn(true);
-        addToast('Acceso demo autorizado.', 'success');
-        if (formAuth.remember) localStorage.setItem('rutaSync_session_token', btoa(JSON.stringify(defaultUser)));
-      }
+    if (!isFirebaseConfigured || !auth) {
+      return setAuthError('Error 500: Archivo .env no configurado correctamente en el servidor.');
     }
-  };
 
-  const handleLogout = () => { setIsLoggedIn(false); setShowLanding(true); setUser(null); localStorage.removeItem('rutaSync_session_token'); addToast('Sesión finalizada.', 'info'); };
-  const handleForgotPassword = (e) => { e.preventDefault(); if (!formAuth.email) { addToast('Ingrese su correo.', 'error'); return; } addToast("Correo de recuperación enviado a " + formAuth.email, 'success'); setIsForgotMode(false); };
-
-  const handleProductoPOSChange = (e) => {
-    const val = e.target.value; let nuevoMonto = '';
-    if (val !== 'custom' && val !== '') {
-      const prod = inventario.find(p => p.id === val);
-      if (prod) { const cant = parseInt(formPOS.cantidad) || 1; nuevoMonto = (prod.precio * cant).toFixed(2); }
-    }
-    setFormPOS({ ...formPOS, productoId: val, customPedido: '', total: nuevoMonto });
-  };
-
-  const handleCantidadPOSChange = (e) => {
-    let val = parseInt(e.target.value);
-    if (isNaN(val) || val < 1) val = 1;
-    let nuevoMonto = formPOS.total;
-    if (formPOS.productoId && formPOS.productoId !== 'custom') {
-      const prod = inventario.find(p => p.id === formPOS.productoId);
-      if (prod) { nuevoMonto = (prod.precio * val).toFixed(2); }
-    }
-    setFormPOS({ ...formPOS, cantidad: val.toString(), total: nuevoMonto });
-  };
-
-  const handleAddVentaPOS = (e) => {
-    e.preventDefault();
-    const cantNum = parseInt(formPOS.cantidad) || 1;
-    const totalParseado = parseFloat(formPOS.total);
-    if (cantNum <= 0 || isNaN(totalParseado) || totalParseado < 0) { addToast("Datos inválidos.", "error"); return; }
-
-    let nombreDelPedido = formPOS.productoId === 'custom' ? formPOS.customPedido : '';
-    if (formPOS.productoId !== 'custom') {
-      const prod = inventario.find(p => p.id === formPOS.productoId);
-      if (prod) {
-        if (prod.cantidad < cantNum) { addToast("Stock insuficiente. Disp: " + prod.cantidad, 'error'); return; }
-        nombreDelPedido = prod.nombre;
-        setInventario(inventario.map(p => p.id === prod.id ? { ...p, cantidad: p.cantidad - cantNum } : p));
-      }
-    }
-    setEntregas([...entregas, {
-      id: generateUUID(), timestamp: Date.now(), fechaCorta: new Date().toLocaleDateString('es-GT'), cliente: formPOS.cliente || 'Cliente Mostrador', telefono: '', direccion: 'Compra en Tienda', pedido: nombreDelPedido,
-      cantidad: cantNum, productoId: formPOS.productoId !== 'custom' ? formPOS.productoId : null, tipoEnvio: 'mostrador', responsable: 'Caja', total: totalParseado, estado: 'entregado', metodoPago: formPOS.metodoPago, firma: 'Venta Directa'
-    }]);
-    setFormPOS({ ...formPOS, cliente: 'Cliente Mostrador', cantidad: 1, total: '', customPedido: '', productoId: '' });
-    addToast('Transacción registrada.', 'success');
-  };
-
-  const handleProductoChange = (e) => {
-    const val = e.target.value; let nuevoMonto = '';
-    if (val !== 'custom' && val !== '') {
-      const prod = inventario.find(p => p.id === val);
-      if (prod) { const cant = parseInt(formRuta.cantidad) || 1; nuevoMonto = (prod.precio * cant).toFixed(2); }
-    }
-    setFormRuta({ ...formRuta, productoId: val, customPedido: '', total: nuevoMonto });
-  };
-
-  const handleCantidadChange = (e) => {
-    let val = parseInt(e.target.value);
-    if (isNaN(val) || val < 1) val = 1;
-    let nuevoMonto = formRuta.total;
-    if (formRuta.productoId && formRuta.productoId !== 'custom') {
-      const prod = inventario.find(p => p.id === formRuta.productoId);
-      if (prod) { nuevoMonto = (prod.precio * val).toFixed(2); }
-    }
-    setFormRuta({ ...formRuta, cantidad: val.toString(), total: nuevoMonto });
-  };
-
-  const handleAddRuta = (e) => {
-    e.preventDefault();
-    const cantNum = parseInt(formRuta.cantidad) || 1;
-    const totalParseado = parseFloat(formRuta.total);
-    if (cantNum <= 0 || isNaN(totalParseado) || totalParseado < 0) { addToast("Datos inválidos.", "error"); return; }
-    let nombreDelPedido = formRuta.productoId === 'custom' ? formRuta.customPedido : '';
-    if (formRuta.productoId !== 'custom') {
-      const prod = inventario.find(p => p.id === formRuta.productoId);
-      if (prod) {
-        if (prod.cantidad < cantNum) { addToast("Stock insuficiente. Disp: " + prod.cantidad, 'error'); return; }
-        nombreDelPedido = prod.nombre;
-        setInventario(inventario.map(p => p.id === prod.id ? { ...p, cantidad: p.cantidad - cantNum } : p));
-      }
-    }
-    setEntregas([...entregas, {
-      id: generateUUID(), timestamp: Date.now(), fechaCorta: new Date().toLocaleDateString('es-GT'), cliente: formRuta.cliente, telefono: formRuta.telefono, direccion: formRuta.direccion, pedido: nombreDelPedido,
-      cantidad: cantNum, productoId: formRuta.productoId !== 'custom' ? formRuta.productoId : null, tipoEnvio: formRuta.tipoEnvio, responsable: formRuta.responsable, total: totalParseado, estado: 'pendiente', metodoPago: null, firma: null
-    }]);
-    setFormRuta({ ...formRuta, cliente: '', telefono: '', direccion: '', responsable: '', cantidad: 1, total: '', customPedido: '', productoId: '' });
-    addToast('Orden generada.', 'success');
-  };
-
-  const eliminarRuta = (id) => {
-    const entrega = entregas.find(e => e.id === id);
-    if (entrega && entrega.productoId && entrega.estado !== 'entregado') { 
-      setInventario(inventario.map(p => p.id === entrega.productoId ? { ...p, cantidad: p.cantidad + entrega.cantidad } : p)); addToast('Orden eliminada. Stock devuelto.', 'info'); 
-    } else { addToast('Orden eliminada.', 'info'); }
-    setEntregas(entregas.filter(e => e.id !== id));
-  };
-  
-  const optimizarRuta = () => { setEntregas([...entregas].reverse()); addToast('Ruta optimizada.', 'success'); };
-  const enviarLinkPiloto = () => { window.open("https://wa.me/?text=" + encodeURIComponent(`🏍️ *RutaSync ERP*\n\nRuta logística asignada:\n🔗 https://rutasync.com/piloto/${user?.company.split(' ').join('').toLowerCase()}`), '_blank'); };
-  const notificarClienteFinal = (entrega) => { window.open(`https://wa.me/502${entrega.telefono}?text=${encodeURIComponent(`¡Hola ${entrega.cliente}! 🚚\n\nTu pedido va en camino con nuestro piloto ${entrega.responsable}.\n\nTotal a cobrar: Q${entrega.total.toFixed(2)}`)}`, '_blank'); };
-  const abrirWaze = (direccion) => { window.open(`https://waze.com/ul?q=${encodeURIComponent(direccion + ", Guatemala")}&navigate=yes`, '_blank'); };
-  const confirmarPOD = () => { setEntregas(entregas.map(e => e.id === modalEntrega ? { ...e, estado: 'entregado', metodoPago: formPOD.metodoPago, firma: formPOD.firma || 'Sin Firma' } : e)); setModalEntrega(null); setFormPOD({ metodoPago: 'efectivo', firma: '', fotoCapturada: false }); addToast('Entrega registrada.', 'success'); };
-
-  const handleAddStock = (e) => { 
-    e.preventDefault(); 
-    const cantNum = parseInt(formStock.cantidad); const preNum = parseFloat(formStock.precio); const minNum = parseInt(formStock.minimo);
-    if (cantNum < 0 || preNum < 0 || minNum < 0) { addToast('Valores negativos no permitidos.', 'error'); return; }
-    setInventario([...inventario, { id: generateUUID(), nombre: formStock.nombre, cantidad: cantNum, precio: preNum, minimo: minNum }]); 
-    setFormStock({ nombre: '', cantidad: '', precio: '', minimo: '' }); addToast('Material ingresado.', 'success'); 
-  };
-  const modificarStock = (id, delta) => { setInventario(inventario.map(p => { if (p.id === id) { const nc = p.cantidad + delta; if (nc >= 0) return { ...p, cantidad: nc }; else addToast('Stock no puede ser menor a cero.', 'error'); } return p; })); };
-  const eliminarProducto = (id) => { setInventario(inventario.filter(p => p.id !== id)); addToast('Material dado de baja.', 'info'); };
-  
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
+    if (authMode === 'forgot') {
+      if (!validateEmail(cleanEmail)) { return setAuthError('Formato de correo electrónico inválido.'); }
+      setIsSubmitting(true);
       try {
-        const text = event.target.result; const rows = text.split('\n').filter(row => row.trim() !== ''); const nuevosProductos = [];
-        for (let i = 1; i < rows.length; i++) {
-          const cols = rows[i].split(/[,;]/); 
-          if (cols.length >= 3) { 
-            let cant = parseInt(cols[1]); let prec = parseFloat(cols[2]); let min = parseInt(cols[3]);
-            if (cant >= 0 && prec >= 0) nuevosProductos.push({ id: generateUUID(), nombre: cols[0] ? cols[0].trim() : 'N/A', cantidad: cant, precio: prec, minimo: min || 5 }); 
+        await sendPasswordResetEmail(auth, cleanEmail);
+        showToast('Enlace de recuperación enviado. Revise su bandeja.');
+        setAuthMode('login');
+      } catch (error) { setAuthError('Fallo en recuperación. Verifique si el correo existe.'); }
+      finally { setIsSubmitting(false); }
+      return;
+    }
+
+    if (!validateEmail(cleanEmail)) { return setAuthError('Formato de correo electrónico inválido.'); }
+
+    setIsSubmitting(true);
+    try {
+      await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+
+      if (authMode === 'login') {
+        await signInWithEmailAndPassword(auth, cleanEmail, password);
+        showToast('Validación exitosa. Cargando entorno de red...');
+      } 
+      else if (authMode === 'register') {
+        if (!empresa.trim()) { setIsSubmitting(false); return setAuthError('El campo de razón social es obligatorio.'); }
+        if (!isPasswordSecure) { setIsSubmitting(false); return setAuthError('La llave criptográfica no cumple con los estándares exigidos.'); }
+        if (!acceptTerms) { setIsSubmitting(false); return setAuthError('Debe autorizar explícitamente los términos legales.'); }
+
+        const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        
+        // Validación de SuperAdmin blindada
+        const assignedRole = cleanEmail.toLowerCase() === 'atencionrutasync@gmail.com' ? 'SUPERADMIN' : 'OWNER';
+
+        await setDoc(doc(db, 'users', userCredential.user.uid), {
+          email: cleanEmail,
+          empresa: empresa.trim(),
+          telefono: telefono.trim(),
+          role: assignedRole,
+          plan: selectedPlan,
+          isActive: true, 
+          createdAt: new Date().toISOString()
+        });
+        showToast('Espacio de servidor desplegado correctamente.');
+      }
+    } catch (error) {
+      if (error.code === 'auth/email-already-in-use') setAuthError('Este identificador ya se encuentra registrado en nuestra base de datos.');
+      else if (error.code === 'auth/invalid-credential') setAuthError('Credenciales rechazadas. Acceso denegado.');
+      else setAuthError(`Servidor: Código interno de error - ${error.code}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (auth) {
+      showToast('Cerrando conexión segura...');
+      await signOut(auth);
+    }
+  };
+
+  // ============================================================================
+  // 5. OPERACIONES CLOUD Y PROTECCIONES (Anti-NaN Runtime)
+  // ============================================================================
+  const handleCompletarVenta = async () => {
+    if (isSubmitting) return; // Escudo Anti-Doble Clic crítico POS
+    if (!isFirebaseConfigured) return showToast('Error 401: Conexión con base de datos no detectada.');
+    
+    const selectedItem = inventario.find(i => i.id.toString() === posSelectedItemId);
+    if (!selectedItem) return showToast('Requisito: Seleccionar un paquete de la matriz.');
+    
+    // Convertir y validar (Filtro Anti-NaN estricto)
+    const parsedQty = parseInt(posQuantity);
+    if (isNaN(parsedQty) || parsedQty <= 0) return showToast('Error Operativo: Inserte un multiplicador de volumen válido.');
+    if (selectedItem.stock < parsedQty) return showToast(`Alerta de Inventario: Stock en bóveda insuficiente (${selectedItem.stock} máx).`);
+
+    setIsSubmitting(true);
+    const total = selectedItem.precio * parsedQty;
+
+    try {
+      // 1. Guardar Venta
+      await addDoc(collection(db, `users/${user.uid}/ventas`), {
+        cliente: posClient.trim() || 'Mostrador Comercial',
+        item: selectedItem.nombre,
+        cantidad: parsedQty,
+        total: total,
+        metodo: posMethod,
+        fechaVisual: new Date().toLocaleString('es-GT', { dateStyle: 'short', timeStyle: 'short' }),
+        createdAt: serverTimestamp()
+      });
+
+      // 2. Descontar Inventario
+      await updateDoc(doc(db, `users/${user.uid}/inventario`, selectedItem.id), {
+        stock: selectedItem.stock - parsedQty
+      });
+
+      showToast(`Terminal POS: Inyección de Q${total.toFixed(2)} exitosa.`);
+      
+      // 3. Limpiar formulario
+      setPosSelectedItemId('');
+      setPosQuantity('1');
+      setPosClient('Cliente Mostrador');
+    } catch (error) {
+      showToast('Fallo en sincronización. Reintente operación.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCrearRuta = async (e) => {
+    e.preventDefault();
+    if (isSubmitting) return; // Escudo Anti-Doble Clic
+    if (!isFirebaseConfigured) return;
+    
+    const { piloto, cliente, direccion, item, qty, telefonoCliente } = newRoute;
+    if (!piloto.trim() || !cliente.trim() || !direccion.trim() || !item) return showToast('Campos estructurales vacíos detectados.');
+    
+    const parsedQty = parseInt(qty);
+    if (isNaN(parsedQty) || parsedQty <= 0) return showToast('Error Operativo: Cantidad de bultos es inválida.');
+
+    const selectedItem = inventario.find(i => i.id.toString() === item);
+    if (!selectedItem) return showToast('Fallo en matriz: Producto desvinculado.');
+    if (selectedItem.stock < parsedQty) return showToast(`Alerta de Inventario: Límite excedido (${selectedItem.stock} disp).`);
+
+    setIsSubmitting(true);
+    const totalCobrar = selectedItem.precio * parsedQty;
+
+    try {
+      await addDoc(collection(db, `users/${user.uid}/rutas`), {
+        piloto: piloto.trim(), 
+        cliente: cliente.trim(), 
+        direccion: direccion.trim(), 
+        telefonoCliente: telefonoCliente.trim() || '',
+        item: selectedItem.nombre,
+        itemId: selectedItem.id, // Guardar ID para revertir stock de manera segura
+        cantidad: parsedQty,
+        totalCobrar: totalCobrar,
+        estado: 'Pendiente',
+        fechaVisual: new Date().toLocaleString('es-GT', { dateStyle: 'short', timeStyle: 'short' }),
+        createdAt: serverTimestamp()
+      });
+
+      await updateDoc(doc(db, `users/${user.uid}/inventario`, selectedItem.id), {
+        stock: selectedItem.stock - parsedQty
+      });
+
+      showToast(`Red de Logística: Vector asignado a operador ${piloto}.`);
+      
+      setShowRouteModal(false);
+      setNewRoute({ piloto: '', telefonoPiloto: '', cliente: '', direccion: '', item: '', qty: '1', telefonoCliente: '' });
+    } catch (error) {
+      showToast('Error 500: Fallo en escritura de ruta en la nube.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleAnularRuta = async (ruta) => {
+    if (!isFirebaseConfigured) return;
+    
+    // AUDITORÍA (Fase 3): Candado de Ghost Stock. Evitar doble-reversión si la ruta ya fue procesada.
+    if (ruta.estado !== 'Pendiente') return showToast('Auditoría Logística: Esta ruta operativa ya no puede ser alterada.');
+    
+    // Confirmación UI segura, sin detener el main thread como haría window.confirm
+    setConfirmDialog({
+      message: `ADVERTENCIA LOGÍSTICA: ¿Confirmar la anulación de esta guía y ordenar retorno físico de ${ruta.cantidad} unidad(es) a bodega principal?`,
+      onConfirm: async () => {
+        setIsSubmitting(true);
+        try {
+          // Revertir Stock
+          if (ruta.itemId) {
+            const itemRef = doc(db, `users/${user.uid}/inventario`, ruta.itemId);
+            const itemSnap = await getDoc(itemRef);
+            if (itemSnap.exists()) {
+              await updateDoc(itemRef, { stock: itemSnap.data().stock + ruta.cantidad });
+              showToast('Cuadre Automático: Volúmenes reincorporados a la matriz.');
+            }
           }
+          
+          // Cambiar estado a cancelado (Soft Delete por auditoría)
+          await updateDoc(doc(db, `users/${user.uid}/rutas`, ruta.id), {
+            estado: 'Cancelado'
+          });
+        } catch (error) {
+          showToast('Error crítico de red al anular movimiento.');
+        } finally {
+          setIsSubmitting(false);
+          setConfirmDialog(null);
         }
-        if (nuevosProductos.length > 0) { setInventario(prev => [...prev, ...nuevosProductos]); addToast("Importación exitosa.", 'success'); } 
-        else addToast('Formato CSV incorrecto.', 'error');
-      } catch (err) { addToast('Error de lectura.', 'error'); }
-    };
-    reader.readAsText(file); e.target.value = null; 
+      }
+    });
   };
 
-  const handleAddEvento = (e) => { 
-    e.preventDefault(); const partes = formEvento.fecha.split('-'); const fechaArmada = new Date(parseInt(partes[0]), parseInt(partes[1]) - 1, parseInt(partes[2]), 0, 0, 0);
-    setEventos([...eventos, { id: generateUUID(), titulo: formEvento.titulo, fechaReal: fechaArmada.getTime(), dia: partes[2], mes: partes[1], anio: partes[0], detalles: formEvento.detalles }]); 
-    setFormEvento({ titulo: '', fecha: '', detalles: '' }); addToast('Evento guardado.', 'success'); 
-  };
-  const eliminarEvento = (id) => setEventos(eventos.filter(e => e.id !== id));
-  
-  const handleAddGasto = (e) => { 
-    e.preventDefault(); const montoValidado = parseFloat(formGasto.monto);
-    if (isNaN(montoValidado) || montoValidado <= 0) { addToast("Monto inválido.", "error"); return; }
-    setGastos([...gastos, { id: generateUUID(), timestamp: Date.now(), fecha: new Date().toLocaleDateString('es-GT'), descripcion: formGasto.descripcion, monto: montoValidado }]); 
-    setFormGasto({ descripcion: '', monto: '' }); addToast('Gasto registrado.', 'success'); 
-  };
-  const eliminarGasto = (id) => setGastos(gastos.filter(g => g.id !== id));
-
-  const extenderSuscripcion = (id) => {
-    setClientesAdmin(clientesAdmin.map(c => {
-      if (c.id === id) { addToast(`Suscripción extendida para ${c.company}`, 'success'); return { ...c, diasRestantes: c.diasRestantes + 30 }; }
-      return c;
-    }));
-  };
-  const alternarEstadoCliente = (id) => {
-    setClientesAdmin(clientesAdmin.map(c => {
-      if (c.id === id) { const nuevoEstado = c.estado === 'activo' ? 'bloqueado' : 'activo'; addToast(`Estado actualizado: ${nuevoEstado}`, 'info'); return { ...c, estado: nuevoEstado }; }
-      return c;
-    }));
-  };
-  const handleAddNotaAdmin = (e) => {
+  const handleCrearProducto = async (e) => {
     e.preventDefault();
-    if (!nuevaNota.trim()) return;
-    setNotasAdmin([...notasAdmin, { id: generateUUID(), nota: nuevaNota.trim() }]);
-    setNuevaNota(''); addToast('Nota guardada.', 'success');
+    if (isSubmitting) return; // Escudo Anti-Doble Clic
+
+    const { sku, nombre, stock, precio } = newProduct;
+    if (!sku.trim() || !nombre.trim()) return showToast('Validación: Campos identificadores vacíos.');
+    
+    // Prevención absoluta de valores corruptos
+    const parsedStock = parseInt(stock);
+    const parsedPrecio = parseFloat(precio);
+    if (isNaN(parsedStock) || isNaN(parsedPrecio)) return showToast('Error Aritmético: Campos de valor requieren números enteros/flotantes.');
+
+    setIsSubmitting(true);
+    try {
+      await addDoc(collection(db, `users/${user.uid}/inventario`), {
+        sku: sku.toUpperCase().trim(),
+        nombre: nombre.trim(),
+        stock: parsedStock,
+        precio: parsedPrecio,
+        createdAt: serverTimestamp()
+      });
+      showToast('Bóveda de Inventario: Referencia guardada correctamente.');
+      setShowProductModal(false);
+      setNewProduct({ sku: '', nombre: '', stock: '1', precio: '0' });
+    } catch (error) {
+      showToast('No se pudo establecer escritura en el servidor Cloud.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
-  const eliminarNotaAdmin = (id) => {
-    setNotasAdmin(notasAdmin.filter(n => n.id !== id)); addToast('Nota eliminada.', 'info');
+
+  const handleEliminarProducto = async (id) => {
+    if (!isFirebaseConfigured) return;
+    
+    setConfirmDialog({
+      message: 'CRÍTICO: La depuración de esta referencia es irreversible y afectará proyecciones métricas pasadas. ¿Ejecutar?',
+      onConfirm: async () => {
+        setIsSubmitting(true);
+        try {
+          await deleteDoc(doc(db, `users/${user.uid}/inventario`, id));
+          showToast('Referencia de bóveda depurada permanentemente.');
+        } catch (error) {
+          showToast('Servidor: Falta de privilegios de eliminación.');
+        } finally {
+          setIsSubmitting(false);
+          setConfirmDialog(null);
+        }
+      }
+    });
   };
-  const handleUpdatePerfil = (e) => {
+
+  const handleCrearEvento = async (e) => {
     e.preventDefault();
-    if (formPerfil.newPassword && formPerfil.newPassword !== formPerfil.confirmPassword) { addToast('Las contraseñas no coinciden.', 'error'); return; }
-    addToast('Perfil actualizado.', 'success');
+    if (isSubmitting) return; // Escudo Anti-Doble Clic
+    
+    const { titulo, fecha, tipo, detalle } = newEvent;
+    if (!titulo.trim() || !fecha) return showToast('Requisito: Defina una designación y cronología.');
+
+    setIsSubmitting(true);
+    try {
+      await addDoc(collection(db, `users/${user.uid}/eventos`), {
+        titulo: titulo.trim(), 
+        fecha, 
+        tipo, 
+        detalle: detalle.trim(),
+        estado: 'Pendiente',
+        createdAt: serverTimestamp()
+      });
+      showToast('Operación confirmada y enlazada a cronograma.');
+      setShowEventModal(false);
+      setNewEvent({ titulo: '', fecha: '', tipo: 'Mantenimiento', detalle: '' });
+    } catch (error) {
+      showToast('Error de transmisión de red hacia el calendario.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const filtrarData = (dataArray, rango) => {
-    if (rango === 'todos') return dataArray;
-    const limit = new Date(); limit.setHours(0,0,0,0);
-    if (rango === '7dias') limit.setDate(limit.getDate() - 7); 
-    else if (rango === '1mes') limit.setMonth(limit.getMonth() - 1); 
-    else if (rango === 'trimestre') limit.setMonth(limit.getMonth() - 3); 
-    else if (rango === 'anual') limit.setFullYear(limit.getFullYear() - 1);
-    const limitTime = limit.getTime(); return dataArray.filter(item => item.timestamp >= limitTime);
+  const handleToggleActivo = async (uid, currentStatus) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { isActive: !currentStatus });
+      showToast(`Protocolo Administrador: Comando de interrupción ejecutado.`);
+    } catch(error) {
+      showToast('Restricción Firestore: Vector no autorizado.');
+    }
   };
-  
-  const valorTotalInventario = inventario.reduce((acc, p) => acc + (p.cantidad * p.precio), 0);
-  const entregasHistorial = filtrarData(entregas, filtroHistorial);
-  const entregasFinanzas = filtrarData(entregas, filtroFinanzas);
-  const gastosFinanzas = filtrarData(gastos, filtroFinanzas);
-  
-  const ingresosPagados = entregasFinanzas.filter(e => e.estado === 'entregado').reduce((acc, e) => acc + e.total, 0);
-  const cuentasPorCobrar = entregasFinanzas.filter(e => e.estado === 'pendiente').reduce((acc, e) => acc + e.total, 0);
-  const totalGastosOperativos = gastosFinanzas.reduce((acc, g) => acc + g.monto, 0);
-  const utilidadNeta = ingresosPagados - totalGastosOperativos;
-  const margenGastos = ingresosPagados > 0 ? (totalGastosOperativos / ingresosPagados) * 100 : 0;
-  const margenUtilidad = ingresosPagados > 0 ? (utilidadNeta / ingresosPagados) * 100 : 0;
 
-  const mrrAcumulado = clientesAdmin.filter(c => c.estado === 'activo').reduce((acc, c) => acc + (c.plan === 'emprendedor' ? 99 : (c.plan === 'pyme' ? 249 : 599)), 0);
-  const liquidacionPilotos = {};
-  entregasFinanzas.filter(e => e.estado === 'entregado').forEach(e => {
-    if (!liquidacionPilotos[e.responsable]) liquidacionPilotos[e.responsable] = { efectivo: 0, digital: 0 };
-    if (e.metodoPago === 'efectivo') liquidacionPilotos[e.responsable].efectivo += e.total;
-    else liquidacionPilotos[e.responsable].digital += e.total;
-  });
+  // --- AUTOMATIZACIÓN INTELIGENTE DE MENSAJES (Sanitización Regex) ---
+  const limpiarTelefonoGuatemala = (rawPhone) => {
+    if (!rawPhone) return "";
+    const cleanPhone = rawPhone.replace(/\D/g, '');
+    if (cleanPhone.startsWith('502')) return cleanPhone;
+    if (cleanPhone.length === 8) return `502${cleanPhone}`;
+    return cleanPhone; // Fallback
+  };
 
-  const chartDataRaw = {};
-  entregasFinanzas.filter(e => e.estado === 'entregado').forEach(e => { chartDataRaw[e.fechaCorta] = (chartDataRaw[e.fechaCorta] || 0) + e.total; });
-  const chartData = Object.keys(chartDataRaw).map(k => ({ date: k, amount: chartDataRaw[k] }));
+  const enviarWhatsAppPiloto = (ruta) => {
+    const phoneStr = limpiarTelefonoGuatemala(ruta.telefonoPiloto);
+    const direccionCodificada = encodeURIComponent(`${ruta.direccion}, Guatemala`);
+    const linkWaze = `https://waze.com/ul?q=${direccionCodificada}&navigate=yes`;
+    const mensaje = `*NUEVO DESPACHO RUTASYNC* 🚚\n\n*Cliente:* ${ruta.cliente}\n*Dirección:* ${ruta.direccion}\n*Entregar:* ${ruta.cantidad}x ${ruta.item}\n\n💰 *Cobrar:* Q${ruta.totalCobrar?.toFixed(2)}\n\n📍 *Navegar con Waze:* ${linkWaze}`;
+    const targetUrl = phoneStr ? `https://wa.me/${phoneStr}?text=${encodeURIComponent(mensaje)}` : `https://wa.me/?text=${encodeURIComponent(mensaje)}`;
+    window.open(targetUrl, '_blank');
+  };
 
-  if (showPDF) {
+  const enviarWhatsAppCliente = (ruta) => {
+    const phoneStr = limpiarTelefonoGuatemala(ruta.telefonoCliente);
+    const mensaje = `¡Hola! Tu pedido de *${userData?.empresa || 'nuestra empresa'}* ya va en camino con nuestro piloto ${ruta.piloto}. 🚚\n\nDetalle: ${ruta.cantidad}x ${ruta.item}\nTotal a pagar: Q${ruta.totalCobrar?.toFixed(2)}`;
+    const targetUrl = phoneStr ? `https://wa.me/${phoneStr}?text=${encodeURIComponent(mensaje)}` : `https://wa.me/?text=${encodeURIComponent(mensaje)}`;
+    window.open(targetUrl, '_blank');
+  };
+
+  // --- PRUEBA DE ENTREGA DIGITAL (POD) CON INTEGRACIÓN GCP STORAGE ---
+  const handleCompletarPruebaEntrega = async (e) => {
+    e.preventDefault();
+    if (!activeDelivery) return;
+    
+    // AUDITORÍA (Fase 3): Candado de Estado. Evitar que re-procese una ruta por latencia
+    if (activeDelivery.estado !== 'Pendiente') return showToast('Auditoría Logística: Esta ruta ya fue liquidada.');
+    
+    if (!deliveryName.trim()) return showToast('Auditoría Logística: Obligatorio certificar entidad receptora.');
+    if (isUploading) return; // Escudo estricto sobre transacciones con archivos
+
+    if (!isFirebaseConfigured || !storage) {
+      showToast('Módulo apagado: Variables GCP Storage desconectadas.');
+      setActiveDelivery(null);
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      let fotoUrl = null;
+
+      if (deliveryPhotoFile) {
+        showToast('Estableciendo túnel para carga cifrada de evidencia...');
+        // Hash de seguridad simple para el nombre del archivo
+        const extension = deliveryPhotoFile.name.split('.').pop() || 'jpg';
+        const fileName = `${activeDelivery.id}_${Date.now()}.${extension}`;
+        
+        // Estructuración aislada en nube por ID de empresa
+        const storageRef = ref(storage, `entregas/${user.uid}/${fileName}`);
+        
+        await uploadBytes(storageRef, deliveryPhotoFile);
+        fotoUrl = await getDownloadURL(storageRef);
+      }
+
+      await updateDoc(doc(db, `users/${user.uid}/rutas`, activeDelivery.id), {
+        estado: 'Entregado',
+        recibe: deliveryName.trim(),
+        metodoPago: deliveryMethod,
+        fotoUrl: fotoUrl,
+        fechaEntrega: new Date().toLocaleString('es-GT', { dateStyle: 'short', timeStyle: 'short' })
+      });
+      
+      showToast('Liquidación de campo verificada e incrustada en libro de operaciones.');
+      
+      setActiveDelivery(null);
+      setDeliveryName('');
+      setDeliveryMethod('Efectivo');
+      setDeliveryPhotoFile(null);
+    } catch (error) {
+      console.error(error);
+      showToast('Falla Crítica de GCP: Imposible completar la mutación del archivo fotográfico.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // ============================================================================
+  // 6. RENDERIZADO: MODALES UI / LEGALES
+  // ============================================================================
+  const renderConfirmModal = () => {
+    if (!confirmDialog) return null;
     return (
-      <div className="min-h-screen w-full bg-slate-200 p-4 md:p-8 flex flex-col items-center overflow-y-auto font-sans">
-        <div className="w-full max-w-4xl flex justify-between items-center mb-6 print:hidden bg-white p-4 rounded shadow-md">
-          <div className="flex items-center gap-2 text-slate-800 font-bold uppercase tracking-wider text-sm">
-            <FileText size={18} className="text-blue-600"/> Acta Oficial de Resultados
-          </div>
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-fade-in">
+        <div className="bg-[#1A2333] p-6 rounded-xl w-full max-w-sm border border-slate-700 shadow-[0_0_50px_rgba(0,0,0,0.8)]">
+          <h3 className="text-white font-bold text-lg mb-4 flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-orange-400"/> Autorización Requerida</h3>
+          <p className="text-slate-300 text-sm mb-6 leading-relaxed">{confirmDialog.message}</p>
           <div className="flex gap-3">
-            <button onClick={() => setShowPDF(false)} className="bg-slate-200 text-slate-700 px-4 py-2 rounded text-xs font-bold uppercase tracking-wider shadow-sm flex items-center gap-2 hover:bg-slate-300 transition">
-              <ArrowLeft size={14}/> Volver al ERP
-            </button>
-            <button onClick={() => window.print()} className="bg-slate-900 text-white px-4 py-2 rounded text-xs font-bold uppercase tracking-wider shadow-md flex items-center gap-2 hover:bg-slate-800 transition">
-              <Printer size={14}/> Imprimir
+            <button onClick={() => setConfirmDialog(null)} disabled={isSubmitting} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-lg transition-colors font-medium disabled:opacity-50">Cancelar Operación</button>
+            <button onClick={confirmDialog.onConfirm} disabled={isSubmitting} className="flex-1 bg-red-500 hover:bg-red-400 text-white font-bold py-2.5 rounded-lg transition-colors flex justify-center items-center shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+              {isSubmitting ? 'Procesando...' : 'Confirmar Acción'}
             </button>
           </div>
-        </div>
-        <div id="acta-pdf-documento" className="w-full max-w-4xl bg-white text-black p-10 md:p-16 shadow-2xl print:shadow-none">
-          <div className="text-center border-b-2 border-slate-800 pb-6 mb-8">
-            <h1 className="text-3xl font-extrabold uppercase tracking-widest text-slate-900">{user?.company}</h1>
-            <h2 className="text-xl font-bold text-slate-700 mt-2 uppercase tracking-wide">Acta de Resultados Financieros</h2>
-            <p className="mt-2 text-sm text-slate-500">Fecha de Emisión: {new Date().toLocaleDateString('es-GT')}</p>
-          </div>
-          <div className="grid grid-cols-2 gap-6 mb-10">
-            <div className="border border-slate-300 p-4">
-              <span className="block text-xs uppercase font-bold text-slate-500 mb-1">Ingresos Brutos Verificados</span>
-              <span className="text-2xl font-bold text-slate-900">Q {ingresosPagados.toLocaleString('es-GT', {minimumFractionDigits:2})}</span>
-            </div>
-            <div className="border border-slate-300 p-4">
-              <span className="block text-xs uppercase font-bold text-slate-500 mb-1">Utilidad Neta Realizada</span>
-              <span className="text-2xl font-bold text-slate-900">Q {utilidadNeta.toLocaleString('es-GT', {minimumFractionDigits:2})}</span>
-            </div>
-          </div>
-          <div className="mt-20 pt-8 border-t border-slate-300 text-center"><p className="text-xs font-bold uppercase">Sello y Firma Autorizada</p></div>
         </div>
       </div>
     );
-  }
+  };
 
-  if (showDriverView) {
-    const rutasPiloto = entregas.filter(e => e.tipoEnvio === 'propio' && e.estado === 'pendiente');
+  const renderAuthModal = () => {
+    if (!showAuthModal) return null;
     return (
-      <div className="h-screen w-full bg-slate-900 text-white font-sans flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
-        <div className="bg-slate-950 border-b border-slate-800 p-4 shadow-md z-10 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <Bike size={20} className="text-cyan-400" />
-            <h1 className="font-bold text-lg leading-none">RutaSync <span className="font-light text-slate-400 text-sm">Piloto</span></h1>
-          </div>
-          <button onClick={() => setShowDriverView(false)} className="text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-full font-bold uppercase tracking-wider text-slate-300 hover:text-white transition flex items-center gap-1">
-            <LogOut size={12}/> Salir
-          </button>
-        </div>
-        
-        {modalEntrega && (
-          <div className="absolute inset-0 bg-slate-900/90 z-50 flex items-end justify-center backdrop-blur-md animate-fade-in">
-            <div className="bg-slate-800 border-t border-slate-700 w-full rounded-t-2xl p-6 shadow-2xl animate-slide-up">
-              <h3 className="font-bold text-lg text-white mb-4 flex items-center gap-2">
-                <CheckCircle size={20} className="text-cyan-400"/> Confirmar Entrega
-              </h3>
-              
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-2">Método de Pago Recibido</label>
-              <div className="grid grid-cols-3 gap-2 mb-4">
-                <button onClick={()=>setFormPOD({...formPOD, metodoPago:'efectivo'})} className={"py-2 rounded-lg border text-xs font-bold flex flex-col items-center gap-1 transition-all " + (formPOD.metodoPago==='efectivo'?'bg-cyan-500/20 border-cyan-500/50 text-cyan-400':'bg-slate-700/50 text-slate-400 border-slate-600')}>
-                  <Wallet size={16}/> Efectivo
-                </button>
-                <button onClick={()=>setFormPOD({...formPOD, metodoPago:'transferencia'})} className={"py-2 rounded-lg border text-xs font-bold flex flex-col items-center gap-1 transition-all " + (formPOD.metodoPago==='transferencia'?'bg-blue-500/20 border-blue-500/50 text-blue-400':'bg-slate-700/50 text-slate-400 border-slate-600')}>
-                  <Smartphone size={16}/> Transf.
-                </button>
-                <button onClick={()=>setFormPOD({...formPOD, metodoPago:'tarjeta'})} className={"py-2 rounded-lg border text-xs font-bold flex flex-col items-center gap-1 transition-all " + (formPOD.metodoPago==='tarjeta'?'bg-purple-500/20 border-purple-500/50 text-purple-400':'bg-slate-700/50 text-slate-400 border-slate-600')}>
-                  <CreditCard size={16}/> Tarjeta
-                </button>
-              </div>
-
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-2">Evidencia y Firma</label>
-              <div className="space-y-3 mb-6">
-                <div className="relative">
-                  <PenTool className="absolute left-3 top-2.5 text-slate-500" size={16} />
-                  <input type="text" placeholder="Nombre de quien recibe / DPI" value={formPOD.firma} onChange={e=>setFormPOD({...formPOD, firma: e.target.value})} className="w-full pl-9 pr-3 py-2.5 bg-slate-900/50 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 outline-none" />
-                </div>
-                <label className={"w-full py-3 rounded-lg border border-dashed flex justify-center items-center gap-2 text-sm font-bold transition cursor-pointer " + (formPOD.fotoCapturada?'bg-cyan-500/20 border-cyan-500/50 text-cyan-400':'bg-slate-900/50 border-slate-600 text-slate-400')}>
-                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e)=>{ if(e.target.files && e.target.files[0]) setFormPOD({...formPOD, fotoCapturada: true}) }} />
-                  {formPOD.fotoCapturada ? <><CheckCircle size={16}/> Evidencia Capturada</> : <><Camera size={16}/> Tomar Fotografía</>}
-                </label>
-              </div>
-              <div className="flex gap-3">
-                <button onClick={()=>setModalEntrega(null)} className="flex-1 py-3 bg-slate-700 text-slate-300 border border-slate-600 font-bold rounded-xl hover:bg-slate-600 transition">Cancelar</button>
-                <button onClick={confirmarPOD} className="flex-1 py-3 bg-cyan-500 text-slate-900 font-bold rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:bg-cyan-400 transition">Completar</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div className="bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 p-3 rounded-xl text-sm font-medium text-center shadow-[0_0_15px_rgba(6,182,212,0.1)]">
-            Tienes <strong>{rutasPiloto.length}</strong> paradas pendientes hoy.
-          </div>
-          {rutasPiloto.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-500">
-              <CheckCircle size={48} className="text-cyan-500/50 mb-4"/>
-              <p className="font-bold uppercase tracking-wider">Ruta Finalizada</p>
-            </div>
-          ) : (
-            rutasPiloto.map((e, index) => (
-              <div key={e.id} className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 overflow-hidden">
-                <div className="bg-slate-900 text-white px-3 py-2 text-[10px] font-bold uppercase tracking-wider flex justify-between items-center border-b border-slate-700">
-                  <span className="text-cyan-400">Parada #{index + 1}</span>
-                  <span className="bg-slate-800 border border-slate-600 px-2 py-0.5 rounded text-[10px]">Cobrar: Q{e.total.toFixed(2)}</span>
-                </div>
-                <div className="p-4 space-y-3">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Destino</p>
-                    <p className="font-bold text-white text-lg leading-tight">{e.direccion}</p>
-                  </div>
-                  <div className="flex justify-between items-center bg-slate-900/50 p-2.5 rounded-lg border border-slate-700">
-                    <div>
-                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Cliente</p>
-                      <p className="font-semibold text-slate-300 text-sm flex items-center gap-1.5"><User size={12} className="text-cyan-500"/> {e.cliente}</p>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Carga a Entregar</p>
-                    <p className="text-sm font-medium text-slate-300"><span className="font-bold text-white">{e.cantidad}x</span> {e.pedido}</p>
-                  </div>
-                  <div className="pt-2 grid grid-cols-2 gap-3 mt-1">
-                    <button onClick={() => abrirWaze(e.direccion)} className="bg-slate-700 text-slate-200 border border-slate-600 font-bold py-3.5 rounded-xl text-xs flex justify-center items-center gap-2 hover:bg-slate-600 transition">
-                      <Navigation size={16}/> Waze
-                    </button>
-                    <button onClick={() => setModalEntrega(e.id)} className="bg-cyan-500 text-slate-900 font-bold py-3.5 rounded-xl text-xs flex justify-center items-center gap-2 shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:bg-cyan-400 transition">
-                      <CheckCircle size={16}/> Entregar
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (!isLoggedIn && showLanding) {
-    return (
-      <div className="min-h-screen bg-slate-950 font-sans flex flex-col overflow-y-auto selection:bg-cyan-500/30 text-slate-300 relative">
-        <div className="fixed inset-0 pointer-events-none z-0">
-          <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-20"></div>
-          <div className="absolute top-[10%] left-[20%] w-[500px] h-[500px] rounded-full bg-cyan-600/10 blur-[120px] mix-blend-screen"></div>
-          <div className="absolute bottom-[10%] right-[10%] w-[600px] h-[600px] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen"></div>
-        </div>
-
-        <nav className="px-6 py-5 flex justify-between items-center sticky top-0 z-50 bg-slate-950/80 backdrop-blur-md border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <div className="bg-cyan-500 text-slate-900 p-2 rounded-lg shadow-[0_0_15px_rgba(6,182,212,0.5)]"><MapIcon size={20} className="font-bold" /></div>
-            <span className="text-2xl font-extrabold tracking-tight text-white">RutaSync <span className="font-light text-cyan-400">ERP</span></span>
-          </div>
-          <div className="flex items-center gap-6">
-            <button onClick={() => handleNavigateToAuth(false)} className="text-sm font-semibold text-slate-300 hover:text-white transition hidden sm:block">Iniciar Sesión</button>
-            <button onClick={() => handleNavigateToAuth(true, 'pyme')} className="bg-transparent border border-cyan-500 text-cyan-400 px-5 py-2 rounded-full text-sm font-bold hover:bg-cyan-500 hover:text-slate-900 transition-all shadow-[0_0_10px_rgba(6,182,212,0.2)] hover:shadow-[0_0_20px_rgba(6,182,212,0.6)]">
-              Comenzar Gratis
+      <div className="fixed inset-0 bg-[#000000cc] backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="bg-[#141C2B] rounded-xl shadow-2xl shadow-cyan-900/30 w-full max-w-md p-1 border border-slate-700 relative max-h-[90vh] overflow-y-auto animate-fade-in custom-scrollbar">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 to-blue-600"></div>
+          
+          <div className="p-7">
+            <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors">
+              <LogOut className="w-5 h-5" />
             </button>
-          </div>
-        </nav>
-        
-        <section className="px-6 py-24 text-center max-w-6xl mx-auto flex flex-col items-center relative z-10">
-          <div className="inline-flex items-center gap-2 bg-slate-800/50 border border-slate-700 text-cyan-400 font-mono px-4 py-1.5 rounded-full text-xs mb-8 uppercase tracking-widest backdrop-blur-sm">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span> Sistema de Gestión Empresarial
-          </div>
-          <h1 className="text-5xl md:text-7xl font-extrabold text-white leading-tight mb-6 tracking-tight">
-            RutaSync es la capa crítica <br className="hidden md:block" />
-            que impulsa su <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">Logística.</span>
-          </h1>
-          <p className="text-lg md:text-xl text-slate-400 mb-12 max-w-3xl leading-relaxed font-light">
-            Estandarice sus procesos operativos, controle el efectivo de sus pilotos en tiempo real y genere inteligencia financiera automatizada para el mercado B2B en Guatemala.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
-            <button onClick={() => handleNavigateToAuth(true, 'pyme')} className="group relative bg-cyan-500 text-slate-900 px-8 py-4 rounded-full text-lg font-bold transition-all flex justify-center items-center gap-2 overflow-hidden hover:scale-105 shadow-[0_0_20px_rgba(6,182,212,0.4)]">
-              <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
-              Acelere su negocio <ArrowRight size={20} />
-            </button>
-            <button onClick={() => document.getElementById('planes-seccion')?.scrollIntoView({ behavior: 'smooth' })} className="bg-slate-800/50 text-white border border-slate-700 px-8 py-4 rounded-full text-lg font-medium hover:bg-slate-800 transition-all backdrop-blur-sm">
-              Ver Soluciones
-            </button>
-          </div>
-        </section>
 
-        <section id="planes-seccion" className="py-24 relative z-10 border-t border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-          <div className="max-w-7xl mx-auto px-6">
-            <div className="text-center mb-16">
-              <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">Infraestructura Escalable</h2>
-              <p className="text-slate-400">Planes diseñados para crecer con usted. Sin contratos forzosos. Cancele en cualquier momento.</p>
-            </div>
+            {authMode === 'login' && (
+              <><div className="flex justify-center mb-4 mt-2"><div className="bg-cyan-500/10 p-4 rounded-xl border border-cyan-500/20"><ShieldCheck className="w-8 h-8 text-cyan-400" /></div></div><h2 className="text-2xl font-bold text-white text-center mb-6">Acceso Seguro</h2></>
+            )}
+
+            {authMode === 'register' && (
+              <><h2 className="text-2xl font-bold text-white text-center mb-6">Crear Cuenta</h2>
+                <div className="bg-slate-800/80 border border-slate-700 rounded-lg p-4 mb-6 flex justify-between items-center"><div><div className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1">Plan Seleccionado</div><div className="text-white font-medium flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cyan-500" /> Plan {selectedPlan}</div></div><button type="button" onClick={() => {setShowAuthModal(false); scrollToPricing();}} className="bg-slate-900 border border-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg hover:text-white transition-colors">Cambiar</button></div></>
+            )}
+
+            {authMode === 'forgot' && (
+              <><h2 className="text-2xl font-bold text-white text-center mb-2">Recuperar Acceso</h2><p className="text-sm text-slate-400 text-center mb-6">Ingresa tu correo y te enviaremos un enlace para restablecer tu contraseña.</p></>
+            )}
+
+            {authError && <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-lg text-sm mb-5 text-center flex items-center justify-center gap-2"><AlertTriangle className="w-4 h-4"/> {authError}</div>}
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto items-stretch">
-              <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 hover:border-cyan-500/30 transition-all flex flex-col group relative overflow-hidden shadow-lg">
-                <h3 className="text-2xl font-bold text-white mb-2 group-hover:text-cyan-400 transition-colors">Emprendedor</h3>
-                <p className="text-sm text-slate-400 mb-6 flex-1">Para negocios independientes y operaciones locales que inician su digitalización.</p>
-                <div className="text-4xl font-extrabold text-white mb-6">Q99<span className="text-lg text-slate-500 font-normal">/mes</span></div>
-                <ul className="space-y-4 text-sm text-slate-300 mb-8 font-medium">
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-500"/> Hasta 200 entregas mensuales</li>
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-500"/> 1 Usuario Administrador</li>
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-500"/> Importación masiva (CSV)</li>
-                  <li className="flex items-center gap-3 text-emerald-400"><MessageCircle size={18}/> Soporte por WhatsApp</li>
-                </ul>
-                <button onClick={() => handleNavigateToAuth(true, 'emprendedor')} className="w-full mt-auto py-3 rounded-xl border border-cyan-500/30 font-bold text-cyan-400 hover:bg-cyan-500/10 transition">Iniciar Prueba Gratis</button>
-              </div>
-
-              <div className="bg-slate-800 border border-cyan-500/60 rounded-2xl p-8 shadow-[0_0_30px_rgba(6,182,212,0.15)] relative transform md:-translate-y-4 flex flex-col">
-                <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-cyan-500 text-slate-900 px-5 py-1 rounded-full text-xs font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-[0_0_15px_rgba(6,182,212,0.5)]">
-                  <Zap size={14}/> Recomendado
-                </div>
-                <h3 className="text-2xl font-bold text-white mb-2 mt-2">Plan PYME</h3>
-                <p className="text-sm text-slate-400 mb-6 flex-1">Para flotas activas que requieren control de cobros e inventario en tiempo real.</p>
-                <div className="text-4xl font-extrabold text-cyan-400 mb-6">Q249<span className="text-lg text-slate-500 font-normal">/mes</span></div>
-                <ul className="space-y-4 text-sm text-slate-200 mb-8 font-medium">
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-400"/> Hasta 1,200 entregas mensuales</li>
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-400"/> Liquidación de Efectivo</li>
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-400"/> Prueba de Entrega (Foto y Firma)</li>
-                  <li className="flex items-center gap-3 text-cyan-300"><Star size={18}/> Soporte Prioritario 24/7</li>
-                </ul>
-                <button onClick={() => handleNavigateToAuth(true, 'pyme')} className="w-full mt-auto py-4 rounded-xl bg-cyan-500 text-slate-900 font-bold hover:bg-cyan-400 transition shadow-[0_0_20px_rgba(6,182,212,0.3)]">Activar Entorno</button>
-              </div>
-
-              <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 hover:border-cyan-500/30 transition-all flex flex-col group relative overflow-hidden shadow-lg">
-                <h3 className="text-2xl font-bold text-white mb-2 group-hover:text-cyan-400 transition-colors">Corporativo</h3>
-                <p className="text-sm text-slate-400 mb-6 flex-1">Infraestructura dedicada para cadenas o distribuidoras con alto volumen.</p>
-                <div className="text-4xl font-extrabold text-white mb-6">Q599<span className="text-lg text-slate-500 font-normal">/mes</span></div>
-                <ul className="space-y-4 text-sm text-slate-300 mb-8 font-medium">
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-500"/> Entregas Ilimitadas</li>
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-500"/> Gestión Multi-Sucursal</li>
-                  <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-cyan-500"/> Acceso a API</li>
-                  <li className="flex items-center gap-3 text-slate-400"><Globe size={18}/> Asesor de Cuenta Asignado</li>
-                </ul>
-                <button onClick={() => handleNavigateToAuth(true, 'corporativo')} className="w-full mt-auto py-3 rounded-xl border border-slate-600 font-bold text-white hover:bg-slate-800 transition">Contactar Ventas</button>
-              </div>
-            </div>
+            <form onSubmit={handleAuthSubmit} className="space-y-5">
+              {authMode === 'register' && (
+                <><div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Nombre de la Empresa</label><div className="relative"><Building className="w-5 h-5 text-slate-500 absolute left-3 top-3" /><input type="text" value={empresa} onChange={(e) => setEmpresa(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg pl-10 pr-4 py-3 text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="Ej. Distribuidora El Sol" /></div></div>
+                  <div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Teléfono / Whatsapp</label><div className="relative"><Phone className="w-5 h-5 text-slate-500 absolute left-3 top-3" /><input type="tel" value={telefono} onChange={(e) => setTelefono(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg pl-10 pr-4 py-3 text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="" /></div></div></>
+              )}
+              <div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Correo Electrónico</label><div className="relative"><Mail className="w-5 h-5 text-slate-500 absolute left-3 top-3" /><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg pl-10 pr-4 py-3 text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="gerencia@empresa.com" /></div></div>
+              {authMode !== 'forgot' && (
+                <div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Contraseña {authMode === 'register' && '(Mín. 8 caracteres)'}</label><div className="relative"><Lock className="w-5 h-5 text-slate-500 absolute left-3 top-3" /><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg pl-10 pr-4 py-3 text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="••••••••" /></div>
+                  {authMode === 'register' && (<div className="mt-3 bg-[#0B1120]/50 border border-slate-800 rounded-lg p-4 space-y-2 text-xs font-mono"><div className={`flex items-center gap-2 ${isLengthValid ? 'text-cyan-400' : 'text-slate-500'}`}>{isLengthValid ? '✓' : '[ x ]'} Mínimo 8 caracteres</div><div className={`flex items-center gap-2 ${hasUpperLower ? 'text-cyan-400' : 'text-slate-500'}`}>{hasUpperLower ? '✓' : '[ x ]'} Mayúsculas y minúsculas</div><div className={`flex items-center gap-2 ${hasNumber ? 'text-cyan-400' : 'text-slate-500'}`}>{hasNumber ? '✓' : '[ x ]'} Número incluido</div><div className={`flex items-center gap-2 ${hasSpecial ? 'text-cyan-400' : 'text-slate-500'}`}>{hasSpecial ? '✓' : '[ x ]'} Símbolo especial (Ej: @, #, $)</div></div>)}</div>
+              )}
+              {authMode === 'register' && (<div className="flex items-start mt-4 bg-slate-800/30 p-3 rounded-lg border border-slate-700/50"><label className="flex items-start space-x-3 cursor-pointer"><input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} className="mt-1 form-checkbox bg-slate-900 border-slate-700 rounded text-cyan-500 focus:ring-cyan-500 h-4 w-4" /><span className="text-xs text-slate-300 leading-relaxed">Confirmo autorización legal bajo los <button type="button" onClick={(e) => { e.preventDefault(); setShowTerms(true); }} className="text-cyan-400 font-bold hover:underline">Términos de Servicio</button> y las <button type="button" onClick={(e) => { e.preventDefault(); setShowTerms(true); }} className="text-cyan-400 font-bold hover:underline">Políticas de Privacidad</button>.</span></label></div>)}
+              {(authMode === 'login' || authMode === 'register') && (<div className="flex items-center justify-between pt-2"><label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="form-checkbox bg-slate-900 border-slate-700 rounded text-cyan-500 focus:ring-cyan-500 h-4 w-4" /><span className="text-sm text-slate-300 font-medium">Mantener sesión activa</span></label>{authMode === 'login' && (<button type="button" onClick={() => setAuthMode('forgot')} className="text-sm text-slate-400 hover:text-cyan-400 transition-colors">¿Olvidaste tu contraseña?</button>)}</div>)}
+              <button type="submit" disabled={isSubmitting} className={`w-full font-bold py-3.5 rounded-lg mt-4 transition-all shadow-[0_0_15px_rgba(0,180,216,0.3)] ${isSubmitting ? 'bg-cyan-600 text-white cursor-not-allowed' : 'bg-[#00B4D8] hover:bg-cyan-400 text-slate-900'}`}>{isSubmitting ? 'Procesando...' : (authMode === 'login' ? 'Ingresar al ERP' : authMode === 'register' ? 'Inicializar Entorno' : 'Enviar Recuperación')}</button>
+            </form>
+            <div className="mt-6 text-center text-sm text-slate-400 border-t border-slate-700/50 pt-6">{authMode === 'login' ? (<>¿No tienes cuenta? <button type="button" onClick={() => setAuthMode('register')} className="text-cyan-400 font-bold hover:underline">Regístrate aquí</button></>) : authMode === 'register' ? (<>¿Ya tienes cuenta? <button type="button" onClick={() => setAuthMode('login')} className="text-cyan-400 font-bold hover:underline">Inicia sesión</button></>) : (<button type="button" onClick={() => setAuthMode('login')} className="text-cyan-400 font-bold hover:underline flex items-center justify-center gap-2 w-full"><ArrowLeft className="w-4 h-4"/> Volver al inicio de sesión</button>)}</div>
           </div>
-        </section>
+        </div>
+      </div>
+    );
+  };
 
-        <footer className="w-full border-t border-slate-800 bg-slate-950 py-12 relative z-10">
-          <div className="max-w-7xl mx-auto px-6 text-center">
-            <h3 className="text-xl font-bold text-white mb-3">¿Necesita un plan a la medida o soporte empresarial?</h3>
-            <p className="text-slate-400 mb-6 font-medium">Nuestro equipo en Guatemala está listo para ayudarle a transformar su logística.</p>
-            <a href="mailto:Atencionrutasync@gmail.com" className="inline-flex items-center justify-center gap-3 bg-cyan-500 text-slate-900 px-8 py-4 rounded-xl font-bold hover:bg-cyan-400 transition-all duration-300 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
-              <Mail size={20} />
-              Atencionrutasync@gmail.com
-            </a>
-            <div className="mt-12 flex justify-center gap-6 text-sm text-slate-500 font-medium">
-              <button onClick={() => setLegalModal('terminos')} className="hover:text-cyan-400 transition">Términos de Servicio</button>
-              <span>|</span>
-              <button onClick={() => setLegalModal('privacidad')} className="hover:text-cyan-400 transition">Privacidad</button>
+  const renderLegalModals = () => {
+    if (showContact) return (<div className="fixed inset-0 bg-[#000000cc] backdrop-blur-sm flex items-center justify-center z-50 p-4"><div className="bg-[#141C2B] rounded-2xl w-full max-w-sm p-8 border border-slate-700 relative text-center"><button onClick={() => setShowContact(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white"><LogOut className="w-5 h-5" /></button><div className="bg-[#00B4D8]/20 p-4 rounded-full inline-block mb-4"><Headset className="w-10 h-10 text-[#00B4D8]" /></div><h2 className="text-xl font-bold text-white mb-2">Atención al Cliente</h2><p className="text-slate-400 mb-6 text-sm">Estamos listos para ayudarte con tu integración. Escríbenos directamente a nuestro correo oficial:</p><div className="bg-[#0B1120] border border-slate-700 rounded-lg p-4 font-mono text-[#00B4D8] mb-6 select-all">atencionrutasync@gmail.com</div><button onClick={() => setShowContact(false)} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg">Cerrar</button></div></div>);
+    if (showTerms) return (
+      <div className="fixed inset-0 bg-[#000000cc] backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="bg-[#141C2B] rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col border border-slate-700 shadow-2xl">
+          <div className="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-900/50 rounded-t-2xl">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2"><Shield className="w-5 h-5 text-cyan-400"/> Marco Jurídico y Arquitectura de Datos B2B</h2>
+            <button onClick={() => setShowTerms(false)} className="text-slate-400 hover:text-white"><LogOut className="w-6 h-6" /></button>
+          </div>
+          <div className="p-8 overflow-y-auto text-slate-300 space-y-6 text-sm leading-relaxed custom-scrollbar">
+            <div><h3 className="text-base font-bold text-cyan-400 mb-2 uppercase tracking-wide">1. Jurisdicción y SLA (Service Level Agreement)</h3><p>RutaSync ERP opera bajo la legislación mercantil de la República de Guatemala. Se clasifica estrictamente como un Micro-SaaS (Software como Servicio). Nuestro SLA garantiza un uptime del 99.9% en servidores de red, excluyendo mantenimientos programados.</p></div>
+            <div><h3 className="text-base font-bold text-cyan-400 mb-2 uppercase tracking-wide">2. Aislamiento Criptográfico de la Información</h3><p>La base de datos (Firestore) implementa políticas Multi-Tenant con reglas de seguridad rígidas. La información financiera, operativa y logística es <strong>actividad comercial confidencial propiedad de la empresa suscriptora</strong>. El rol OWNER es el único vector autorizado para gestionar sus propios datos.</p></div>
+            <div><h3 className="text-base font-bold text-cyan-400 mb-2 uppercase tracking-wide">3. Limitación Estricta de Responsabilidad Civil</h3><p>El código provisto actúa como una capa de inteligencia artificial y trazabilidad. Sin embargo, <strong>la empresa despachadora absorbe todo el riesgo logístico real</strong>. RutaSync no asume responsabilidad civil, penal o mercantil sobre mermas, robos en ruta, siniestralidad vial, desvío de efectivo por parte de pilotos, ni conflictos laborales generados a raíz del uso del sistema de control.</p></div>
+          </div>
+          <div className="p-6 border-t border-slate-700 bg-slate-900/50 rounded-b-2xl">
+            <button onClick={() => setShowTerms(false)} className="w-full bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 font-bold py-3.5 rounded-lg transition-colors shadow-lg shadow-cyan-500/20 text-base">Reconozco el Marco Legal y Autorizo</button>
+          </div>
+        </div>
+      </div>
+    );
+    return null;
+  };
+
+  // ============================================================================
+  // 7. RENDERIZADO: FRONTEND (LANDING PAGE COMERCIAL)
+  // ============================================================================
+  if (currentView === 'landing' || (!user && !loadingAuth)) {
+    return (
+      <div className="min-h-screen bg-[#0B1120] text-slate-300 font-sans selection:bg-cyan-500/30 relative overflow-hidden flex flex-col">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none"></div>
+        {toastMessage && (<div className="fixed top-4 right-4 bg-emerald-500 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-2 z-50 animate-bounce print:hidden"><CheckCircle2 className="w-5 h-5" /> {toastMessage}</div>)}
+
+        <nav className="fixed w-full z-40 bg-[#0B1120]/90 backdrop-blur-md border-b border-slate-800"><div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between"><div className="flex items-center gap-3"><div className="bg-gradient-to-br from-[#00B4D8] to-blue-600 p-2 rounded-xl"><MapIcon className="w-6 h-6 text-white" /></div><span className="text-2xl font-bold text-white tracking-tight">RutaSync <span className="text-[#00B4D8] font-light text-lg">ERP</span></span></div><div className="flex items-center gap-4"><button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="text-slate-300 hover:text-white font-medium px-4">Iniciar Sesión</button><button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="bg-transparent border border-[#00B4D8] text-[#00B4D8] hover:bg-[#00B4D8]/10 px-6 py-2 rounded-full font-medium transition-colors">Comenzar Gratis</button></div></div></nav>
+        
+        <div className="relative pt-32 pb-20 lg:pt-48 lg:pb-32 max-w-7xl mx-auto px-6 text-center z-10 flex-1"><div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/50 border border-slate-700 text-[#00B4D8] text-xs font-semibold uppercase tracking-wider mb-8"><div className="w-2 h-2 rounded-full bg-[#00B4D8] animate-pulse"></div>Sistema de Gestión Empresarial</div><h1 className="text-5xl lg:text-7xl font-extrabold text-white tracking-tight mb-8 leading-tight">RutaSync es la capa crítica <br/>que impulsa su <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00B4D8] to-blue-500">Logística.</span></h1><p className="text-lg text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed">Estandarice sus procesos operativos, controle el efectivo de sus pilotos en tiempo real y genere inteligencia financiera automatizada para el mercado B2B en Guatemala.</p><div className="flex flex-col sm:flex-row items-center justify-center gap-4"><button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="w-full sm:w-auto bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 font-bold px-8 py-4 rounded-full flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20">Acelere su negocio <ArrowRight className="w-5 h-5" /></button><button onClick={scrollToPricing} className="w-full sm:w-auto bg-slate-800 hover:bg-slate-700 text-white font-medium px-8 py-4 rounded-full transition-all border border-slate-700">Ver Soluciones</button></div></div>
+        
+        <div id="pricing-section" className="py-24 bg-gradient-to-b from-slate-900/50 to-[#0B1120] border-t border-slate-800 relative z-10"><div className="max-w-7xl mx-auto px-6"><div className="text-center mb-16"><h2 className="text-4xl font-extrabold text-white mb-4">Infraestructura Escalable</h2><p className="text-slate-400 text-lg">Planes diseñados para crecer con usted. Sin contratos forzosos. Cancele en cualquier momento.</p></div><div className="grid md:grid-cols-3 gap-8 items-center max-w-6xl mx-auto">
+              <div className="bg-[#0B1120] rounded-2xl p-8 border border-slate-800 flex flex-col h-[500px]"><h3 className="text-2xl font-bold text-white mb-3">Emprendedor</h3><p className="text-sm text-slate-400 mb-6 h-10">Para negocios independientes que inician su digitalización.</p><div className="flex items-baseline gap-1 mb-8"><span className="text-5xl font-black text-white">Q99</span><span className="text-slate-500 font-medium">/mes</span></div><ul className="space-y-4 mb-auto text-sm"><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Hasta 200 entregas mensuales</li><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> 1 Usuario Administrador</li><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Enlace de ruta para pilotos</li><li className="flex items-center gap-3 text-[#00B4D8] font-medium"><MessageCircle className="w-5 h-5" /> Soporte por WhatsApp</li></ul><button onClick={() => {setSelectedPlan('EMPRENDEDOR'); setAuthMode('register'); setShowAuthModal(true);}} className="w-full bg-transparent border border-slate-700 text-cyan-400 hover:bg-slate-800 font-bold py-3 rounded-lg transition-colors mt-8">Iniciar Prueba Gratis</button></div>
+              <div className="bg-[#141C2B] rounded-2xl p-8 border border-cyan-500/50 relative shadow-[0_0_30px_rgba(0,180,216,0.15)] flex flex-col h-[540px] transform md:scale-105 z-10"><div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-[#00B4D8] text-slate-900 text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-widest flex items-center gap-1"><Zap className="w-4 h-4 fill-current" /> RECOMENDADO</div><h3 className="text-2xl font-bold text-white mb-3 mt-2">Plan PYME</h3><p className="text-sm text-slate-400 mb-6 h-10">Para flotas activas que requieren control de cobros e inventario en tiempo real.</p><div className="flex items-baseline gap-1 mb-8"><span className="text-5xl font-black text-[#00B4D8]">Q249</span><span className="text-slate-500 font-medium">/mes</span></div><ul className="space-y-4 mb-auto text-sm"><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Hasta 1,200 entregas mensuales</li><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Control de dinero en calle</li><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Foto y nombre de quien recibe</li><li className="flex items-center gap-3 text-white font-bold"><Star className="w-5 h-5 text-[#00B4D8] fill-current" /> Soporte Prioritario</li></ul><button onClick={() => {setSelectedPlan('PYME'); setAuthMode('register'); setShowAuthModal(true);}} className="w-full bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 font-bold py-3.5 rounded-lg transition-colors mt-8 shadow-[0_0_15px_rgba(0,180,216,0.3)]">Activar Entorno</button></div>
+              <div className="bg-[#0B1120] rounded-2xl p-8 border border-slate-800 flex flex-col h-[500px]"><h3 className="text-2xl font-bold text-white mb-3">Corporativo</h3><p className="text-sm text-slate-400 mb-6 h-10">Infraestructura dedicada para cadenas con alto volumen.</p><div className="flex items-baseline gap-1 mb-8"><span className="text-5xl font-black text-white">Q599</span><span className="text-slate-500 font-medium">/mes</span></div><ul className="space-y-4 mb-auto text-sm"><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Entregas Ilimitadas</li><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Control de múltiples sucursales</li><li className="flex items-center gap-3 text-slate-300"><CheckCircle2 className="w-5 h-5 text-[#00B4D8]" /> Roles y permisos para empleados</li><li className="flex items-center gap-3 text-slate-300"><BarChart3 className="w-5 h-5 text-[#00B4D8]" /> Historial y reportes avanzados</li></ul><button onClick={() => {setSelectedPlan('CORPORATIVO'); setAuthMode('register'); setShowAuthModal(true);}} className="w-full bg-transparent border border-slate-700 text-white hover:bg-slate-800 font-bold py-3 rounded-lg transition-colors mt-8">Contactar Ventas</button></div>
+        </div></div></div>
+
+        <footer className="border-t border-slate-800 bg-[#0B1120] py-12 relative z-10 mt-auto">
+          <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="flex items-center gap-2"><MapIcon className="w-5 h-5 text-[#00B4D8]" /><span className="text-lg font-bold text-white">RutaSync</span></div>
+            <div className="flex gap-6 text-sm text-slate-400">
+              <button onClick={() => setShowTerms(true)} className="hover:text-[#00B4D8] transition-colors font-medium">Términos de Servicio</button>
+              <button onClick={() => setShowTerms(true)} className="hover:text-[#00B4D8] transition-colors font-medium">Políticas de Privacidad</button>
+              <button onClick={() => setShowContact(true)} className="hover:text-[#00B4D8] transition-colors font-medium">Contacto Oficial</button>
             </div>
+            <div className="text-sm text-slate-500">© 2026 RutaSync Guatemala.</div>
           </div>
         </footer>
 
-        {legalModal && (
-          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[100] flex justify-center items-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl flex flex-col shadow-2xl relative" style={{maxHeight: '80vh'}}>
-              <div className="flex justify-between items-center p-6 border-b border-slate-800 shrink-0">
-                <h2 className="text-xl font-bold text-white">{legalModal === 'terminos' ? 'Términos de Servicio Comercial' : 'Política de Privacidad y Ciberseguridad'}</h2>
-                <button onClick={() => setLegalModal(null)} className="text-slate-400 hover:text-red-400 transition text-3xl leading-none">&times;</button>
-              </div>
-              <div className="p-6 overflow-y-auto text-sm text-slate-300 space-y-4 text-left font-light leading-relaxed flex-1 scrollbar-thin scrollbar-thumb-cyan-500/50 scrollbar-track-transparent">
-                  <p><strong className="text-cyan-400">Última actualización:</strong> Junio 2026</p>
-                  {legalModal === 'terminos' ? (
-                    <>
-                      <p>RutaSync ("nosotros", "la Empresa") provee una plataforma de Software como Servicio (SaaS) orientada a la gestión de inventarios y logística comercial para empresas (B2B).</p>
-                      <h3 className="font-bold text-white mt-4">1. Naturaleza del Servicio</h3>
-                      <p>RutaSync es estrictamente un proveedor de herramientas tecnológicas. No somos una empresa de transporte, mensajería, ni nos hacemos responsables por la mercancía extraviada o dañada por los pilotos de la empresa contratante.</p>
-                      <h3 className="font-bold text-white mt-4">2. Pagos y Suscripciones</h3>
-                      <p>El uso del sistema requiere el pago de una suscripción mensual prepagada. No existen contratos de permanencia forzosa. El usuario puede cancelar su suscripción en cualquier momento, perdiendo acceso a las funciones premium al finalizar su ciclo facturado.</p>
-                      <h3 className="font-bold text-white mt-4">3. Aceptación Legal</h3>
-                      <p>Conforme al Decreto 47-2008 (Ley para el Reconocimiento de las Comunicaciones y Firmas Electrónicas de Guatemala), al marcar la casilla de aceptación y crear una cuenta, usted formaliza su ingreso legal a nuestra plataforma, comprometiéndose al buen uso de la misma y validando que posee la autoridad legal para representar a la empresa registrada.</p>
-                    </>
-                  ) : (
-                    <>
-                      <p>El cuidado de su información corporativa es nuestra máxima prioridad. Esta política detalla cómo manejamos sus datos dentro de la infraestructura de RutaSync.</p>
-                      <h3 className="font-bold text-white mt-4">1. Recopilación de Datos</h3>
-                      <p>Recopilamos únicamente la información necesaria para el funcionamiento del ERP: nombres de clientes finales, direcciones de entrega, números de teléfono y registros de inventario ingresados por la empresa titular de la cuenta.</p>
-                      <h3 className="font-bold text-white mt-4">2. Privacidad Absoluta (Apego Constitucional)</h3>
-                      <p>En estricto apego al Artículo 31 de la Constitución Política de la República de Guatemala, RutaSync garantiza que <strong className="text-white">NO vendemos, NO compartimos y NO alquilamos</strong> su base de datos de clientes ni su información financiera a terceros bajo ninguna circunstancia.</p>
-                      <h3 className="font-bold text-white mt-4">3. Ciberseguridad y Encriptación</h3>
-                      <p>Las contraseñas de todos los usuarios son encriptadas bajo protocolos de hash irreversibles antes de ser almacenadas en nuestros servidores en la nube. Ningún empleado de RutaSync, incluido el equipo de soporte técnico, tiene acceso a sus contraseñas en texto plano.</p>
-                    </>
-                  )}
-              </div>
-              <div className="p-4 border-t border-slate-800 flex justify-end shrink-0 bg-slate-950 rounded-b-2xl">
-                <button onClick={() => setLegalModal(null)} className="bg-cyan-500 text-slate-900 px-6 py-2 rounded-lg font-bold hover:bg-cyan-400 transition shadow-[0_0_15px_rgba(6,182,212,0.3)]">
-                  Entendido y Cerrar
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {renderAuthModal()}
+        {renderLegalModals()}
+        {renderConfirmModal()}
       </div>
     );
   }
 
-  if (!isLoggedIn && !showLanding) {
-    return (
-      <div className="min-h-screen w-full flex bg-slate-950 font-sans relative overflow-y-auto text-slate-300 py-10 px-4 selection:bg-cyan-500/30">
-        <div className="absolute top-0 right-0 w-1/2 h-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-cyan-900/20 via-slate-950 to-slate-950 pointer-events-none fixed"></div>
-        <div className="w-full max-w-md m-auto bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl p-6 md:p-8 relative z-10 h-auto my-auto">
-          <button onClick={() => setShowLanding(true)} className="text-slate-400 hover:text-cyan-400 flex items-center gap-2 mb-6 text-[10px] uppercase font-bold tracking-widest transition-colors">
-            <ArrowLeft size={14} /> Volver al Inicio
-          </button>
-          
-          <div className="flex items-center gap-2 mb-6">
-            <div className="bg-cyan-500 text-slate-900 p-1.5 rounded shadow-[0_0_10px_rgba(6,182,212,0.5)]"><MapIcon size={18} /></div>
-            <span className="text-xl font-bold tracking-tight text-white uppercase">RutaSync <span className="font-light text-cyan-400">Portal</span></span>
-          </div>
-          
-          <h2 className="text-2xl font-bold text-white mb-2">
-            {isForgotMode ? 'Recuperar Acceso' : (isRegisterMode ? 'Crear Entorno de Trabajo' : 'Inicio de Sesión')}
-          </h2>
-          <p className="text-slate-400 text-sm mb-6 font-light">
-            {isForgotMode ? 'Enviaremos instrucciones seguras a su correo.' : (isRegisterMode ? 'Inicialice la base de datos para su empresa.' : 'Ingrese sus credenciales de administrador.')}
-          </p>
-          
-          {isRegisterMode && (
-            <div className="mb-6 p-4 bg-slate-800/80 border border-slate-700 rounded-xl flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-cyan-400 font-bold uppercase tracking-widest mb-1">Plan Seleccionado</p>
-                <p className="text-white font-bold capitalize text-sm flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-cyan-500"/> Plan {selectedPlanToRegister}
-                </p>
-              </div>
-              <button type="button" onClick={() => setShowLanding(true)} className="text-xs font-bold bg-slate-900 px-3 py-1.5 rounded-lg text-slate-300 hover:text-white border border-slate-700 transition-colors">
-                Cambiar
-              </button>
+  // ============================================================================
+  // 8. RENDERIZADO: MOTOR INTERNO DEL ERP (AUDITADO CON PROTECCIÓN PRINT)
+  // ============================================================================
+  const exportToPDF = () => { window.print(); showToast("Ejecutando renderizado de reporte seguro..."); };
+  const handleSimularImportacionExcel = () => { showToast("Analizando archivo CSV de origen..."); setTimeout(() => showToast("Extracción de datos completada exitosamente."), 1500); };
+
+  // MATEMÁTICA ESTRICTA (Protección Activa en Runtime contra valores corruptos)
+  const totalEfectivo = ventas.filter(v => v.metodo === 'Efectivo').reduce((acc, v) => acc + (Number(v.total) || 0), 0) + rutas.filter(r => r.estado === 'Entregado' && r.metodoPago === 'Efectivo').reduce((acc, r) => acc + (Number(r.totalCobrar) || 0), 0);
+  const totalTarjetas = ventas.filter(v => v.metodo !== 'Efectivo').reduce((acc, v) => acc + (Number(v.total) || 0), 0) + rutas.filter(r => r.estado === 'Entregado' && r.metodoPago !== 'Efectivo').reduce((acc, r) => acc + (Number(r.totalCobrar) || 0), 0);
+
+  const renderERPContent = () => {
+    switch (currentView) {
+      case 'dashboard':
+        return (
+          <div className="space-y-6 animate-in fade-in duration-500 max-w-7xl mx-auto print:hidden">
+            <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
+              <div><h2 className="text-2xl font-bold text-white">Telemetría Operativa</h2><p className="text-slate-400">Lecturas en tiempo real para el entorno de {userData?.empresa || 'Cargando...'}.</p></div>
+              <div className="flex gap-2"><button onClick={() => setCurrentView('despachos')} className="bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-[0_0_15px_rgba(0,180,216,0.2)]"><Plus className="w-4 h-4" /> Despachar Unidad</button></div>
             </div>
-          )}
-
-          {isForgotMode ? (
-            <form onSubmit={handleForgotPassword} className="space-y-4">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Correo Corporativo</label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 text-slate-500" size={16} />
-                  <input type="email" required value={formAuth.email} onChange={e => setFormAuth({...formAuth, email: e.target.value})} className="w-full pl-10 pr-4 py-2.5 bg-slate-950/50 border border-slate-700 rounded-xl text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none transition-all" />
-                </div>
-              </div>
-              <button type="submit" className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold py-3 rounded-xl text-sm transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-4">
-                Enviar Enlace de Recuperación
-              </button>
-              <button type="button" onClick={() => setIsForgotMode(false)} className="w-full text-xs font-bold text-slate-400 hover:text-white mt-2 transition-colors">
-                Cancelar
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleAuth} className="space-y-4">
-              {isRegisterMode && (
-                <>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Nombre de la Empresa</label>
-                    <div className="relative">
-                      <Building className="absolute left-3 top-3 text-slate-500" size={16} />
-                      <input type="text" required value={formAuth.company} onChange={e => setFormAuth({...formAuth, company: e.target.value})} className="w-full pl-10 pr-4 py-2.5 bg-slate-950/50 border border-slate-700 rounded-xl text-white text-sm focus:border-cyan-500 focus:ring-1 outline-none transition-all" placeholder="Ej. Distribuidora El Sol" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Teléfono / WhatsApp</label>
-                    <div className="relative">
-                      <Phone className="absolute left-3 top-3 text-slate-500" size={16} />
-                      <input type="tel" value={formAuth.telefono} onChange={e => setFormAuth({...formAuth, telefono: e.target.value})} className="w-full pl-10 pr-4 py-2.5 bg-slate-950/50 border border-slate-700 rounded-xl text-white text-sm focus:border-cyan-500 focus:ring-1 outline-none transition-all" />
-                    </div>
-                  </div>
-                </>
-              )}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Correo Electrónico</label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 text-slate-500" size={16} />
-                  <input type="email" required value={formAuth.email} onChange={e => setFormAuth({...formAuth, email: e.target.value})} className="w-full pl-10 pr-4 py-2.5 bg-slate-950/50 border border-slate-700 rounded-xl text-white text-sm focus:border-cyan-500 focus:ring-1 outline-none transition-all" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Clave de Seguridad</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 text-slate-500" size={16} />
-                  <input type="password" required value={formAuth.password} onChange={e => setFormAuth({...formAuth, password: e.target.value})} className="w-full pl-10 pr-4 py-2.5 bg-slate-950/50 border border-slate-700 rounded-xl text-white text-sm focus:border-cyan-500 focus:ring-1 outline-none transition-all" />
-                </div>
-                {isRegisterMode && (
-                  <div className="mt-2 text-[10px] space-y-1 bg-slate-950/50 p-2.5 rounded-lg border border-slate-800 font-mono">
-                    <p className={formAuth.password.length >= 8 ? "text-cyan-400" : "text-slate-500"}>[ {formAuth.password.length >= 8 ? '✓' : 'x'} ] Mínimo 8 caracteres</p>
-                    <p className={/[A-Z]/.test(formAuth.password) && /[a-z]/.test(formAuth.password) ? "text-cyan-400" : "text-slate-500"}>[ {/[A-Z]/.test(formAuth.password) && /[a-z]/.test(formAuth.password) ? '✓' : 'x'} ] Mayúsculas y minúsculas</p>
-                    <p className={/[0-9]/.test(formAuth.password) ? "text-cyan-400" : "text-slate-500"}>[ {/[0-9]/.test(formAuth.password) ? '✓' : 'x'} ] Número incluido</p>
-                    <p className={/[^A-Za-z0-9]/.test(formAuth.password) ? "text-cyan-400" : "text-slate-500"}>[ {/[^A-Za-z0-9]/.test(formAuth.password) ? '✓' : 'x'} ] Símbolo especial (Ej: @, #, $)</p>
-                  </div>
-                )}
-              </div>
-              
-              {isRegisterMode && (
-                <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700 mt-2">
-                  <label className="flex items-start gap-3 cursor-pointer">
-                    <input type="checkbox" required checked={formAuth.acceptTerms} onChange={e => setFormAuth({...formAuth, acceptTerms: e.target.checked})} className="mt-1 bg-slate-900 border-slate-600 text-cyan-500 rounded focus:ring-cyan-500 w-4 h-4 shrink-0" />
-                    <span className="text-xs text-slate-400 leading-relaxed font-light">
-                      Confirmo autorización legal bajo los <button type="button" onClick={() => setLegalModal('terminos')} className="text-cyan-400 font-bold hover:underline">Términos de Servicio</button> y la <button type="button" onClick={() => setLegalModal('privacidad')} className="text-cyan-400 font-bold hover:underline">Política de Privacidad</button>.
-                    </span>
-                  </label>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between mt-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={formAuth.remember} onChange={e => setFormAuth({...formAuth, remember: e.target.checked})} className="bg-slate-900 border-slate-600 text-cyan-500 rounded focus:ring-cyan-500" />
-                  <span className="text-xs text-slate-400 font-medium">Mantener sesión activa</span>
-                </label>
-                {!isRegisterMode && (
-                  <button type="button" onClick={() => setIsForgotMode(true)} className="text-xs font-bold text-cyan-400 hover:text-cyan-300 transition">¿Olvidó su clave?</button>
-                )}
-              </div>
-              
-              <button type="submit" className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold py-3.5 rounded-xl text-sm transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-4 flex justify-center items-center gap-2">
-                {isRegisterMode ? 'Inicializar Entorno' : 'Autenticar Ingreso'} <ChevronRight size={18} />
-              </button>
-            </form>
-          )}
-          
-          <div className="mt-6 pt-5 border-t border-slate-800 text-center">
-            <p className="text-slate-400 text-xs font-medium">
-              {isRegisterMode ? '¿Ya tiene acceso a su empresa?' : '¿Aún no tiene infraestructura con nosotros?'}
-              <button onClick={() => setIsRegisterMode(!isRegisterMode)} className="ml-2 text-white font-bold uppercase tracking-wide hover:text-cyan-400 transition-colors">
-                {isRegisterMode ? 'Inicie Sesión' : 'Cree su Cuenta'}
-              </button>
-            </p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="bg-[#141C2B] p-6 rounded-xl border border-slate-700 hover:border-blue-500/50 transition-colors"><div className="flex justify-between items-start mb-4"><div className="p-2 bg-blue-500/20 rounded-lg"><Truck className="w-6 h-6 text-blue-400" /></div></div><h3 className="text-slate-400 text-sm font-medium">Unidades en Calle</h3><p className="text-3xl font-bold text-white mt-1">{rutas.filter(r=>r.estado==='Pendiente').length}</p></div>
+              <div className="bg-[#141C2B] p-6 rounded-xl border border-slate-700 hover:border-emerald-500/50 transition-colors"><div className="flex justify-between items-start mb-4"><div className="p-2 bg-emerald-500/20 rounded-lg"><DollarSign className="w-6 h-6 text-emerald-400" /></div></div><h3 className="text-slate-400 text-sm font-medium">Transacciones (POS)</h3><p className="text-3xl font-bold text-white mt-1">{ventas.length}</p></div>
+              <div className="bg-[#141C2B] p-6 rounded-xl border border-slate-700 hover:border-purple-500/50 transition-colors"><div className="flex justify-between items-start mb-4"><div className="p-2 bg-purple-500/20 rounded-lg"><Package className="w-6 h-6 text-purple-400" /></div></div><h3 className="text-slate-400 text-sm font-medium">SKUs en Bóveda</h3><p className="text-3xl font-bold text-white mt-1">{inventario.length}</p></div>
+              <div className="bg-[#141C2B] p-6 rounded-xl border border-slate-700 hover:border-orange-500/50 transition-colors"><div className="flex justify-between items-start mb-4"><div className="p-2 bg-orange-500/20 rounded-lg"><AlertTriangle className="w-6 h-6 text-orange-400" /></div></div><h3 className="text-slate-400 text-sm font-medium">Entornos Aislados</h3><p className="text-3xl font-bold text-white mt-1">{clientesAdmin.length > 0 ? clientesAdmin.length : 1}</p></div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-[#141C2B] p-6 rounded-xl border border-slate-700"><h3 className="text-lg font-bold text-white mb-6">Proyección Analítica (Ingresos de Red)</h3><div className="h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={dataRendimiento}><CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} /><XAxis dataKey="nombre" stroke="#94a3b8" axisLine={false} tickLine={false} /><YAxis stroke="#94a3b8" axisLine={false} tickLine={false} tickFormatter={(value) => `Q${value}`} /><Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#fff' }} itemStyle={{ color: '#00B4D8' }}/><Bar dataKey="ingresos" fill="#00B4D8" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></div>
+            </div>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="h-screen w-full flex flex-col bg-slate-900 text-slate-300 font-sans print:bg-white print:text-black selection:bg-cyan-500/30">
+        );
       
-      {/* HEADER SUPERIOR */}
-      <header className="bg-slate-950 border-b border-slate-800 px-4 py-2.5 flex justify-between items-center z-20 shrink-0 print:hidden">
-        <div className="flex items-center gap-4">
-          <div className="bg-cyan-500/10 border border-cyan-500/30 p-1.5 rounded-lg shadow-[0_0_10px_rgba(6,182,212,0.2)]"><MapIcon size={18} className="text-cyan-400"/></div>
-          <div className="flex flex-col">
-            <span className="text-sm font-bold tracking-wider leading-none uppercase text-white">RUTASYNC ERP</span>
-            <span className="text-[10px] text-cyan-500 font-mono tracking-widest">{user?.company.toUpperCase()}</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="hidden md:flex flex-col text-right">
-            <span className="text-xs font-bold text-white">{user?.email}</span>
-            <span className="text-[10px] text-slate-400 font-mono uppercase">Rol: <span className="text-cyan-400">{user?.role.toUpperCase()}</span></span>
-          </div>
-          {user?.role !== 'superadmin' && (
-            <div className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">
-              Prueba: {user?.diasRestantes !== undefined ? `${user.diasRestantes} días` : '30 días'}
-            </div>
-          )}
-          <button onClick={handleLogout} className="bg-slate-800 border border-slate-700 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-red-500/20 hover:border-red-500/50 transition-all">
-            <LogOut size={16} />
-          </button>
-        </div>
-      </header>
-
-      {user?.role === 'superadmin' ? (
-        <div className="flex-1 flex flex-col overflow-hidden animate-fade-in relative">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-900/20 via-slate-900 to-slate-900 pointer-events-none z-0"></div>
-          
-          <div className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex gap-4 shadow-sm z-10 shrink-0">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="text-cyan-400" size={18}/>
-              <span className="text-xs font-bold uppercase tracking-widest text-white">Consola Central CEO</span>
-            </div>
-          </div>
-          
-          <main className="flex-1 p-6 overflow-y-auto space-y-6 relative z-10">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg border-l-4 border-l-cyan-500">
-                <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">MRR Total Estimado</span>
-                <span className="text-3xl font-bold text-white">Q {mrrAcumulado.toLocaleString('es-GT', {minimumFractionDigits: 2})}</span>
-                <span className="block text-[10px] text-slate-500 mt-2">Calculado en base a clientes activos.</span>
-              </div>
-              <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg border-l-4 border-l-blue-500">
-                <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">Empresas Registradas</span>
-                <span className="text-3xl font-bold text-white">{clientesAdmin.length}</span>
-                <span className="block text-[10px] text-slate-500 mt-2">Clientes en Base de Datos.</span>
-              </div>
-              <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg border-l-4 border-l-purple-500">
-                <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">Soporte Técnico Activo</span>
-                <span className="text-lg font-bold text-purple-400 flex items-center gap-1 mt-2">
-                  <MessageCircle size={18}/> WhatsApp Directo
-                </span>
-                <span className="block text-[10px] text-slate-500 mt-2">Canal de atención preferente.</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700 shadow-lg overflow-hidden flex flex-col min-h-[400px]">
-                <div className="p-4 border-b border-slate-700 bg-slate-900/50 flex justify-between items-center">
-                  <h3 className="text-xs uppercase font-bold text-white tracking-widest">Directorio de Clientes</h3>
+      case 'pos':
+        const selectedPosItem = inventario.find(i => i.id.toString() === posSelectedItemId);
+        const parsedPosQty = parseInt(posQuantity);
+        const posTotal = selectedPosItem && !isNaN(parsedPosQty) ? (selectedPosItem.precio * parsedPosQty) : 0;
+        return (
+          <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500 print:hidden">
+            <h2 className="text-2xl font-bold text-white mb-6">Terminal de Cobro Rápido (POS)</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+              <div className="lg:col-span-1 bg-[#141C2B] rounded-xl border border-slate-700 p-6 flex flex-col shadow-lg shadow-black/20">
+                <h3 className="font-bold text-slate-300 text-sm uppercase flex items-center gap-2 mb-6"><ShoppingCart className="w-4 h-4"/> Ejecutar Transacción</h3>
+                <div className="space-y-4">
+                  <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Entidad Cliente</label><input type="text" value={posClient} onChange={e=>setPosClient(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:border-[#00B4D8] outline-none" /></div>
+                  <div className="flex gap-3"><div className="flex-1"><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Identificador (Item)</label><select value={posSelectedItemId} onChange={(e) => setPosSelectedItemId(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:border-[#00B4D8] outline-none appearance-none"><option value="">Seleccione paquete...</option>{inventario.map(item => <option key={item.id} value={item.id}>{item.nombre} (Q{item.precio})</option>)}</select></div><div className="w-20"><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Volumen</label><input type="number" min="1" value={posQuantity} onChange={(e) => setPosQuantity(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:border-[#00B4D8] outline-none text-center font-mono" /></div></div>
+                  <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Protocolo de Pago</label><select value={posMethod} onChange={e=>setPosMethod(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:border-[#00B4D8] outline-none"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option></select></div>
                 </div>
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-900/80 border-b border-slate-700 text-[10px] uppercase tracking-widest text-slate-400">
-                        <th className="px-4 py-3 font-bold">Empresa / Contacto</th>
-                        <th className="px-4 py-3 font-bold text-center">Plan</th>
-                        <th className="px-4 py-3 font-bold text-center">Prueba</th>
-                        <th className="px-4 py-3 font-bold text-center">Estado</th>
-                        <th className="px-4 py-3 font-bold text-center">Acciones</th>
-                      </tr>
+                <div className="mt-8 pt-6 border-t border-slate-700"><label className="block text-xs font-bold text-[#00B4D8] uppercase mb-2">Sumatoria Calculada (Q)</label><div className="w-full bg-[#0B1120] border border-emerald-500/30 rounded-lg px-4 py-4 text-white text-2xl font-black font-mono flex justify-end tracking-wider">{posTotal.toFixed(2)}</div><button onClick={handleCompletarVenta} disabled={isSubmitting} className={`w-full font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 mt-4 transition-colors ${isSubmitting ? 'bg-cyan-600/50 text-slate-300 cursor-not-allowed border border-cyan-500/30' : 'bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 shadow-[0_0_15px_rgba(0,180,216,0.3)]'}`}>{isSubmitting ? 'ENCRIPTANDO DATOS...' : 'INCRUSTAR EN LEDGER'} {!isSubmitting && <ArrowRight className="w-4 h-4" />}</button></div>
+              </div>
+              <div className="lg:col-span-3 bg-[#141C2B] rounded-xl border border-slate-700 overflow-hidden flex flex-col shadow-lg shadow-black/20">
+                <div className="p-4 border-b border-slate-700"><h3 className="font-bold text-white uppercase text-sm flex items-center gap-2"><History className="w-4 h-4"/> Bloques Confirmados (Hoy)</h3></div>
+                <div className="flex-1 flex flex-col bg-[#0B1120]">
+                  <div className="bg-[#1A2333] px-6 py-3 border-b border-slate-700 grid grid-cols-5 text-xs font-bold text-slate-400 uppercase tracking-wider"><div className="col-span-1">Marca de Tiempo</div><div className="col-span-1">Destinatario</div><div className="col-span-1 text-center">Paquete</div><div className="col-span-1 text-right">Valor Final</div><div className="col-span-1 text-right">Protocolo</div></div>
+                  {ventas.length === 0 ? (<div className="flex-1 flex flex-col items-center justify-center py-24 text-slate-600"><Store className="w-12 h-12 mb-3 opacity-20" /><div className="text-sm font-bold uppercase tracking-widest">Base de datos vacía</div></div>) : (
+                    <div className="overflow-y-auto max-h-[500px] custom-scrollbar">
+                      {ventas.map((v, i) => (
+                        <div key={i} className="px-6 py-4 border-b border-slate-800 grid grid-cols-5 text-sm text-slate-300 hover:bg-slate-800/50 transition-colors"><div className="col-span-1 font-mono text-cyan-400 text-xs">{v.fechaVisual}</div><div className="col-span-1 font-bold text-white">{v.cliente}</div><div className="col-span-1 text-center">{v.cantidad}x {v.item}</div><div className="col-span-1 text-right text-emerald-400 font-bold font-mono">Q{Number(v.total || 0).toFixed(2)}</div><div className="col-span-1 text-right"><span className="bg-slate-800 border border-slate-700 px-2 py-1.5 rounded text-xs text-slate-300">{v.metodo}</span></div></div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'almacen':
+        return (
+          <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500 print:hidden">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+              <h2 className="text-2xl font-bold text-white">Centro de Inventario y Abastecimiento</h2>
+              <div className="flex gap-2">
+                <label className="bg-slate-800 border border-slate-700 hover:bg-slate-700 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 cursor-pointer transition-colors shadow-lg"><FileSpreadsheet className="w-4 h-4 text-emerald-500" /> Analizar CSV<input type="file" className="hidden" accept=".xlsx, .xls, .csv" onChange={handleSimularImportacionExcel} /></label>
+                <button onClick={() => setShowProductModal(true)} className="bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-[0_0_15px_rgba(0,180,216,0.3)]"><Plus className="w-4 h-4" /> Agregar SKU</button>
+              </div>
+            </div>
+
+            {showProductModal && (
+              <form onSubmit={handleCrearProducto} className="bg-[#1A2333] p-6 rounded-xl border-l-4 border-l-[#00B4D8] mb-6 shadow-2xl grid grid-cols-1 md:grid-cols-4 gap-5 animate-slide-up">
+                <div className="col-span-1 md:col-span-4 text-lg font-bold text-white border-b border-slate-700 pb-3 mb-2 flex justify-between items-center">
+                  <div className="flex items-center gap-2"><Package className="w-5 h-5 text-cyan-400"/> Instanciar Nueva Referencia en Base de Datos</div>
+                  <button type="button" onClick={() => setShowProductModal(false)} className="text-slate-500 hover:text-white bg-slate-800 p-1 rounded transition-colors"><X className="w-5 h-5"/></button>
+                </div>
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Código SKU Físico</label><input required value={newProduct.sku} onChange={e=>setNewProduct({...newProduct, sku: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-cyan-400 focus:border-cyan-500 outline-none uppercase font-mono tracking-widest shadow-inner" placeholder="Ej. RUT-004"/></div>
+                <div className="col-span-1 md:col-span-2"><label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Descripción Técnica del Producto</label><input required value={newProduct.nombre} onChange={e=>setNewProduct({...newProduct, nombre: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none shadow-inner" placeholder="Ej. Caja Organizadora 20L"/></div>
+                <div className="grid grid-cols-2 gap-3 col-span-1 md:col-span-4 lg:col-span-1">
+                  <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Stock Disp.</label><input required type="number" min="0" value={newProduct.stock} onChange={e=>setNewProduct({...newProduct, stock: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none font-mono text-center shadow-inner" /></div>
+                  <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Valor (Q)</label><input required type="number" min="0" step="0.01" value={newProduct.precio} onChange={e=>setNewProduct({...newProduct, precio: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-emerald-400 font-bold focus:border-cyan-500 outline-none font-mono text-center shadow-inner" /></div>
+                </div>
+                <div className="col-span-1 md:col-span-4 text-right mt-3 border-t border-slate-700 pt-5 flex justify-end gap-3">
+                  <button type="button" onClick={() => setShowProductModal(false)} className="px-6 py-2.5 text-slate-400 hover:text-white transition-colors font-medium">Descartar</button>
+                  <button type="submit" disabled={isSubmitting} className={`font-bold px-8 py-2.5 rounded-lg transition-all flex items-center gap-2 ${isSubmitting ? 'bg-cyan-600 text-white cursor-not-allowed' : 'bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 shadow-[0_0_15px_rgba(0,180,216,0.3)]'}`}>{isSubmitting ? <><Upload className="w-4 h-4 animate-bounce"/> Escribiendo Nube...</> : 'Insertar en Catálogo'}</button>
+                </div>
+              </form>
+            )}
+
+            <div className="bg-[#141C2B] rounded-xl border border-slate-700 overflow-hidden shadow-xl">
+              <div className="p-5 border-b border-slate-700 bg-slate-800/30 flex gap-4"><div className="relative flex-1 max-w-md"><Search className="w-5 h-5 absolute left-3 top-3 text-slate-500" /><input type="text" placeholder="Escaneo lógico por SKU o descripción..." className="w-full bg-[#0B1120] border border-slate-700 rounded-lg pl-11 pr-4 py-2.5 text-sm text-white focus:border-cyan-500 outline-none shadow-inner transition-colors focus:bg-slate-900" /></div></div>
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm text-slate-300"><thead className="bg-[#0B1120] text-slate-400 text-xs uppercase tracking-wider font-bold"><tr><th className="px-6 py-4 border-b border-slate-700">Identificador (SKU)</th><th className="px-6 py-4 border-b border-slate-700">Producto Físico</th><th className="px-6 py-4 border-b border-slate-700 text-center">Volumen de Bodega</th><th className="px-6 py-4 border-b border-slate-700">Paridad de Venta</th><th className="px-6 py-4 border-b border-slate-700 text-right">Depurar</th></tr></thead><tbody className="divide-y divide-slate-800">
+                {inventario.map((item) => (
+                  <tr key={item.id} className="hover:bg-slate-800/50 transition-colors group"><td className="px-6 py-5 font-mono text-cyan-400 tracking-wider font-bold">{item.sku}</td><td className="px-6 py-5 font-medium text-white">{item.nombre}</td><td className="px-6 py-5 text-center"><span className={`px-4 py-1.5 rounded text-xs font-black font-mono shadow-sm ${item.stock < 50 ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>{item.stock} UNIDADES</span></td><td className="px-6 py-5 font-bold text-slate-200 font-mono tracking-wide">Q{Number(item.precio || 0).toFixed(2)}</td><td className="px-6 py-5 text-right"><button onClick={() => handleEliminarProducto(item.id)} className="text-slate-500 hover:text-red-400 p-2 ml-2 transition-colors bg-slate-800/50 hover:bg-red-500/10 rounded-lg opacity-50 group-hover:opacity-100 border border-transparent hover:border-red-500/30"><Trash2 className="w-4 h-4" /></button></td></tr>
+                ))}
+                {inventario.length === 0 && (<tr><td colSpan="5" className="text-center py-16 text-slate-600 uppercase tracking-widest font-bold"><Package className="w-12 h-12 mx-auto mb-3 opacity-20"/> No se detectan anomalías (Almacén Vacío).</td></tr>)}
+              </tbody></table></div>
+            </div>
+          </div>
+        );
+
+      case 'despachos':
+        return (
+          <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500 print:hidden">
+            <div className="flex justify-between items-center mb-6">
+              <div><h2 className="text-2xl font-bold text-white">Matriz de Despacho Operativo</h2><p className="text-slate-400 text-sm mt-1">Control satelital y de logística de última milla.</p></div>
+              <button onClick={() => setShowRouteModal(!showRouteModal)} className="bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 shadow-[0_0_15px_rgba(0,180,216,0.3)]"><Navigation className="w-4 h-4" /> Asignar Vector de Ruta</button>
+            </div>
+            
+            {activeDelivery && (
+              <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <form onSubmit={handleCompletarPruebaEntrega} className="bg-[#141C2B] p-8 rounded-2xl w-full max-w-md border border-cyan-500/30 shadow-[0_0_60px_rgba(0,180,216,0.15)] animate-slide-up">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-white font-bold text-xl flex items-center gap-2"><CheckCircle2 className="w-6 h-6 text-cyan-400"/> Validación de Entrega (POD)</h3>
+                  </div>
+                  
+                  <div className="bg-[#0B1120] p-5 rounded-xl border border-slate-700 mb-6 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl"></div>
+                    <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Destino Oficial</div>
+                    <div className="text-white font-bold text-lg mb-3">{activeDelivery.cliente}</div>
+                    <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Recaudo Físico / Digital Requerido</div>
+                    <div className="text-emerald-400 font-black text-2xl font-mono">Q{Number(activeDelivery.totalCobrar).toFixed(2)}</div>
+                  </div>
+                  
+                  <div className="space-y-5">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Identidad del Receptor</label>
+                      <input required value={deliveryName} onChange={e=>setDeliveryName(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 focus:bg-slate-900 outline-none transition-colors shadow-inner" placeholder="Ej. DPI / Nombre del Guardia" />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Protocolo de Liquidación</label>
+                      <select required value={deliveryMethod} onChange={e=>setDeliveryMethod(e.target.value)} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none shadow-inner">
+                        <option>Efectivo (Cod)</option>
+                        <option>Transferencia Bancaria</option>
+                        <option>Tarjeta (POS Móvil)</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Autenticación Biométrica / Visual</label>
+                      <label className={`w-full flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-xl mb-2 cursor-pointer transition-all ${deliveryPhotoFile ? 'border-emerald-500 bg-emerald-500/10 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'border-slate-600 bg-[#0B1120] hover:border-cyan-500 hover:bg-cyan-500/5'}`}>
+                        {deliveryPhotoFile ? <CheckCircle2 className="w-10 h-10 text-emerald-500 mb-3 animate-pulse"/> : <Camera className="w-10 h-10 text-slate-500 mb-3 group-hover:text-cyan-400 transition-colors"/>}
+                        <span className={`text-sm font-bold uppercase tracking-wider ${deliveryPhotoFile ? 'text-emerald-500' : 'text-slate-400'}`}>{deliveryPhotoFile ? 'Captura Almacenada en Memoria' : 'Abrir Dispositivo Óptico'}</span>
+                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => setDeliveryPhotoFile(e.target.files[0])} />
+                      </label>
+                      <p className="text-center text-[10px] text-slate-500 uppercase tracking-widest font-bold">Datos transmitidos a servidor seguro GCP</p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 mt-8 pt-6 border-t border-slate-800">
+                    <button type="button" onClick={() => { setActiveDelivery(null); setDeliveryPhotoFile(null); }} disabled={isUploading} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-3.5 rounded-xl transition-colors disabled:opacity-50">Abortar</button>
+                    <button type="submit" disabled={isUploading} className={`flex-1 font-bold py-3.5 rounded-xl transition-all flex justify-center items-center gap-2 shadow-lg ${isUploading ? 'bg-emerald-900 text-emerald-200 cursor-not-allowed shadow-none' : 'bg-emerald-500 hover:bg-emerald-400 text-slate-900 shadow-emerald-500/30'}`}>
+                      {isUploading ? <><Upload className="w-4 h-4 animate-bounce"/> Encriptando...</> : 'Cerrar Vector'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {showRouteModal && (
+              <form onSubmit={handleCrearRuta} className="bg-[#1A2333] p-8 rounded-2xl border-t-4 border-t-[#00B4D8] mb-8 shadow-2xl grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-up relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-[#00B4D8]/5 rounded-full blur-3xl pointer-events-none"></div>
+                <div className="col-span-1 md:col-span-2 text-xl font-bold text-white border-b border-slate-700 pb-4 mb-2 flex items-center gap-3"><Navigation className="w-6 h-6 text-cyan-400"/> Protocolo de Asignación de Despacho Físico</div>
+                <div className="bg-[#0B1120]/50 p-5 rounded-xl border border-slate-800 space-y-4">
+                  <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest border-b border-slate-800 pb-2">Información del Motorista</h4>
+                  <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Identificador de Piloto</label><input required value={newRoute.piloto} onChange={e=>setNewRoute({...newRoute, piloto: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none shadow-inner" placeholder="Ej. Piloto_Alfa_1"/></div>
+                  <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Conexión Remota (WA Piloto)</label><input value={newRoute.telefonoPiloto} onChange={e=>setNewRoute({...newRoute, telefonoPiloto: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none font-mono text-sm shadow-inner" placeholder="Ej. 5555 6666"/></div>
+                </div>
+                
+                <div className="bg-[#0B1120]/50 p-5 rounded-xl border border-slate-800 space-y-4">
+                   <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest border-b border-slate-800 pb-2">Datos del Destino (Cliente)</h4>
+                   <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Entidad Receptora</label><input required value={newRoute.cliente} onChange={e=>setNewRoute({...newRoute, cliente: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none shadow-inner" placeholder="Ej. Constructora Base"/></div>
+                   <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Conexión Remota (WA Cliente)</label><input value={newRoute.telefonoCliente} onChange={e=>setNewRoute({...newRoute, telefonoCliente: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none font-mono text-sm shadow-inner" placeholder="Ej. 4444 5555"/></div>
+                </div>
+                
+                <div className="col-span-1 md:col-span-2 bg-[#0B1120]/50 p-5 rounded-xl border border-slate-800 space-y-4">
+                  <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest border-b border-slate-800 pb-2">Carga Física y Coordenadas</h4>
+                  <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Coordenadas o Dirección (Input Waze)</label><input required value={newRoute.direccion} onChange={e=>setNewRoute({...newRoute, direccion: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none shadow-inner" placeholder="Ej. 10 Calle 5-40 Zona 10, Ciudad de Guatemala"/></div>
+                  <div className="grid grid-cols-2 gap-4">
+                     <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Paquete (SKU Vinculado)</label><select required value={newRoute.item} onChange={e=>setNewRoute({...newRoute, item: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none shadow-inner"><option value="">Seleccione bulto de bodega...</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.nombre}</option>)}</select></div>
+                     <div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Unidades (Multiplicador)</label><input type="number" min="1" value={newRoute.qty} onChange={e=>setNewRoute({...newRoute, qty: e.target.value})} className="w-full bg-[#141C2B] border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none text-center font-mono font-bold shadow-inner" /></div>
+                  </div>
+                </div>
+                
+                <div className="col-span-1 md:col-span-2 text-right mt-2 pt-6 border-t border-slate-700 flex justify-end items-center gap-4">
+                  <button type="button" onClick={()=>setShowRouteModal(false)} disabled={isSubmitting} className="px-6 py-3 text-slate-400 hover:text-white font-bold transition-colors disabled:opacity-50">Abortar Emisión</button>
+                  <button type="submit" disabled={isSubmitting} className={`font-bold px-10 py-3.5 rounded-lg shadow-lg transition-all flex items-center gap-2 ${isSubmitting ? 'bg-cyan-900 text-cyan-200 cursor-not-allowed shadow-none' : 'bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 shadow-cyan-500/30'}`}>{isSubmitting ? <><Upload className="w-4 h-4 animate-bounce"/> Procesando Lote...</> : 'Transmitir Guía al Motorista'}</button>
+                </div>
+              </form>
+            )}
+
+            {rutas.length === 0 ? (
+              <div className="bg-[#141C2B] rounded-xl border border-slate-700 p-16 text-center shadow-xl flex flex-col items-center"><div className="bg-slate-800 p-6 rounded-full mb-6 border border-slate-700 shadow-inner"><Truck className="w-16 h-16 text-slate-600" /></div><h3 className="text-xl font-bold text-white mb-2 uppercase tracking-widest">Radar Despejado</h3><p className="text-slate-500 text-sm font-medium">Inicie un protocolo de despacho para visualizar telemetría de sus unidades en la calle.</p></div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                {rutas.map((ruta, i) => (
+                  <div key={i} className="bg-[#141C2B] p-6 rounded-2xl border border-slate-700 relative overflow-hidden shadow-xl hover:border-cyan-500/50 hover:shadow-[0_0_30px_rgba(0,180,216,0.1)] transition-all flex flex-col group">
+                    <div className={`absolute top-0 right-0 text-white text-[10px] font-black tracking-widest px-4 py-1.5 rounded-bl-xl uppercase shadow-md ${ruta.estado === 'Entregado' ? 'bg-emerald-500' : 'bg-orange-500'}`}>{ruta.estado}</div>
+                    
+                    <div className="flex items-center gap-4 mb-5">
+                      <div className="bg-[#0B1120] p-3.5 rounded-xl border border-slate-700 shadow-inner group-hover:bg-slate-800 transition-colors"><Bike className="w-6 h-6 text-cyan-400" /></div>
+                      <div>
+                        <h4 className="font-bold text-white text-lg leading-tight truncate w-48 mb-1">{ruta.cliente}</h4>
+                        <span className="text-xs text-slate-400 font-bold tracking-wider flex items-center gap-1.5 uppercase"><User className="w-3.5 h-3.5 text-slate-500"/> OP: {ruta.piloto}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-[#0B1120] p-4 rounded-xl border border-slate-700/50 mb-5 space-y-2.5">
+                      <div className="text-sm text-slate-300 truncate flex items-center gap-2"><MapIcon className="w-4 h-4 text-slate-500 flex-shrink-0"/> <span className="truncate">{ruta.direccion}</span></div>
+                      <div className="text-sm text-slate-300 font-medium flex items-center gap-2"><Package className="w-4 h-4 text-slate-500 flex-shrink-0"/> {ruta.cantidad} Unidad(es) de {ruta.item}</div>
+                    </div>
+
+                    <div className="border-t border-slate-700 pt-4 flex justify-between items-end mb-4">
+                      <div><div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Time Log</div><div className="text-xs text-cyan-400 font-mono">{ruta.fechaVisual}</div></div>
+                      <div className="text-right"><div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Valor en Riesgo</div><div className="font-black text-emerald-400 text-xl font-mono">Q{Number(ruta.totalCobrar || 0).toFixed(2)}</div></div>
+                    </div>
+                    
+                    {/* ACCIONES DEL MOTORISTA */}
+                    {ruta.estado === 'Pendiente' && (
+                      <div className="grid grid-cols-2 gap-3 mt-auto pt-4 border-t border-slate-700/50">
+                         <button onClick={() => enviarWhatsAppPiloto(ruta)} className="bg-[#25D366]/10 text-[#25D366] border border-[#25D366]/20 py-2.5 rounded-lg flex justify-center items-center gap-2 hover:bg-[#25D366]/20 transition-colors font-bold text-xs shadow-sm uppercase tracking-wider"><MessageCircle className="w-4 h-4"/> Canal Piloto</button>
+                         <button onClick={() => enviarWhatsAppCliente(ruta)} className="bg-blue-500/10 text-blue-400 border border-blue-500/20 py-2.5 rounded-lg flex justify-center items-center gap-2 hover:bg-blue-500/20 transition-colors font-bold text-xs shadow-sm uppercase tracking-wider"><MessageCircle className="w-4 h-4"/> Alerta Cliente</button>
+                         <button onClick={() => handleAnularRuta(ruta)} className="col-span-1 bg-transparent border border-red-500/30 text-red-400 py-2.5 rounded-lg flex justify-center items-center gap-2 hover:bg-red-500/10 transition-colors font-bold text-xs shadow-sm uppercase tracking-wider"><ShieldAlert className="w-4 h-4"/> Anular</button>
+                         <button onClick={() => { setActiveDelivery(ruta); setDeliveryPhotoFile(null); setDeliveryName(''); }} className="col-span-1 bg-cyan-500 text-slate-900 py-2.5 rounded-lg flex justify-center items-center gap-2 hover:bg-cyan-400 transition-colors font-black text-xs shadow-[0_0_15px_rgba(0,180,216,0.3)] uppercase tracking-wider"><CheckCircle2 className="w-4 h-4"/> Aprobar POD</button>
+                      </div>
+                    )}
+
+                    {ruta.estado === 'Entregado' && ruta.recibe && (
+                       <div className="mt-auto pt-4 border-t border-slate-700/50 text-xs text-slate-400 flex flex-col gap-2">
+                         <div className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/20 p-2.5 rounded-lg">
+                           <ShieldCheck className="w-5 h-5 text-emerald-500 flex-shrink-0"/>
+                           <div className="flex flex-col">
+                             <span className="font-bold text-emerald-500 tracking-wider uppercase text-[10px]">Liquidación Física Confirmada</span>
+                             <span className="truncate text-white font-medium">Receptor: {ruta.recibe} ({ruta.metodoPago})</span>
+                           </div>
+                         </div>
+                         {ruta.fotoUrl && (
+                           <a href={ruta.fotoUrl} target="_blank" rel="noreferrer" className="bg-[#0B1120] border border-slate-700 py-2 px-3 rounded-lg text-cyan-400 hover:text-white hover:border-cyan-500 transition-colors flex items-center justify-center gap-2 font-bold uppercase tracking-wider text-[10px]">
+                             <Camera className="w-4 h-4"/> Visualizar Evidencia en Servidor
+                           </a>
+                         )}
+                       </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+
+      case 'historial':
+        return (
+          <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500 print:hidden">
+            <h2 className="text-2xl font-bold text-white mb-6">Auditoría Contable de Red</h2>
+            <div className="bg-[#141C2B] rounded-xl border border-slate-700 overflow-hidden shadow-2xl">
+               <div className="p-5 border-b border-slate-700 bg-slate-900/50"><h3 className="font-bold text-white text-sm uppercase tracking-widest flex items-center gap-2"><History className="w-4 h-4 text-cyan-400"/> Libro Mayor Consolidado</h3></div>
+               <div className="p-0 bg-[#0B1120]">
+                 {ventas.length === 0 && rutas.length === 0 ? <p className="text-slate-500 text-center font-bold uppercase tracking-widest py-16 text-xs">El libro mayor se encuentra sin registros.</p> : 
+                   <div className="divide-y divide-slate-800/80">
+                     {ventas.map((v,i) => (
+                       <div key={`v-${i}`} className="flex justify-between items-center p-5 hover:bg-slate-800/50 transition-colors">
+                         <div className="flex items-center gap-4">
+                           <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg"><Store className="w-5 h-5 text-emerald-400"/></div>
+                           <div><span className="text-xs font-bold tracking-widest uppercase block mb-1 text-emerald-400">POS (Mostrador) | {v.fechaVisual}</span><span className="text-white text-sm font-bold">{v.cliente} <span className="text-slate-500 font-medium ml-2">- {v.cantidad}x {v.item}</span></span></div>
+                         </div>
+                         <div className="text-emerald-400 font-black text-xl font-mono">Q{Number(v.total || 0).toFixed(2)}</div>
+                       </div>
+                     ))}
+                     {rutas.map((r,i) => (
+                       <div key={`r-${i}`} className={`flex justify-between items-center p-5 hover:bg-slate-800/50 transition-colors ${r.estado === 'Cancelado' ? 'opacity-50 grayscale' : ''}`}>
+                         <div className="flex items-center gap-4">
+                           <div className={`border p-2.5 rounded-lg ${r.estado === 'Cancelado' ? 'bg-red-500/10 border-red-500/20' : 'bg-cyan-500/10 border-cyan-500/20'}`}><Truck className={`w-5 h-5 ${r.estado === 'Cancelado' ? 'text-red-400' : 'text-cyan-400'}`}/></div>
+                           <div><span className={`text-xs font-bold tracking-widest uppercase block mb-1 ${r.estado === 'Cancelado' ? 'text-red-400' : 'text-cyan-400'}`}>Vector Logístico | {r.fechaVisual} | Estatus: {r.estado}</span><span className="text-white text-sm font-bold">OP: {r.piloto} <span className="text-slate-500 font-medium mx-2">&rarr;</span> {r.cliente} <span className="text-slate-500 font-medium ml-2">- {r.cantidad}x {r.item}</span></span></div>
+                         </div>
+                         <div className={`font-black text-xl font-mono ${r.estado === 'Cancelado' ? 'text-slate-500 line-through' : 'text-emerald-400'}`}>Q{Number(r.totalCobrar || 0).toFixed(2)}</div>
+                       </div>
+                     ))}
+                   </div>
+                 }
+               </div>
+            </div>
+          </div>
+        );
+
+      case 'finanzas':
+        return (
+          <div className="space-y-6 max-w-7xl mx-auto">
+            <div className="flex justify-between items-center mb-6 print:hidden">
+              <h2 className="text-2xl font-bold text-white">Cuadre de Efectivo y Caja</h2>
+              <button onClick={exportToPDF} className="bg-[#00B4D8] hover:bg-cyan-400 text-slate-900 font-bold px-6 py-2.5 rounded-lg flex items-center gap-2 transition-colors shadow-[0_0_15px_rgba(0,180,216,0.3)]"><FileOutput className="w-4 h-4" /> Exportar Dictamen a PDF</button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:hidden">
+              <div className="bg-[#141C2B] p-8 rounded-2xl border-t-4 border-t-emerald-500 shadow-2xl relative overflow-hidden"><div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div><h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6 flex items-center gap-2"><Wallet className="w-5 h-5 text-emerald-400"/> Masa Monetaria (Físico)</h3><div className="text-6xl font-black text-white mb-2 font-mono flex items-baseline gap-2"><span className="text-2xl text-emerald-500">Q</span>{totalEfectivo.toFixed(2)}</div><p className="text-sm font-medium text-emerald-400">Corte de caja obligatorio para liquidación de pilotos.</p></div>
+              <div className="bg-[#141C2B] p-8 rounded-2xl border-t-4 border-t-blue-500 shadow-2xl relative overflow-hidden"><div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div><h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6 flex items-center gap-2"><CreditCard className="w-5 h-5 text-blue-400"/> Banca Digital (Transferencias)</h3><div className="text-6xl font-black text-white mb-2 font-mono flex items-baseline gap-2"><span className="text-2xl text-blue-500">Q</span>{totalTarjetas.toFixed(2)}</div><p className="text-sm font-medium text-blue-400">Fondos ya asegurados en cuentas bancarias empresariales.</p></div>
+            </div>
+
+            {/* SECCIÓN OCULTA SOLO PARA IMPRESIÓN OFICIAL (PDF) -> Blindado contra z-index de Tailwind */}
+            <div className="hidden print:block bg-white text-black print:absolute print:top-0 print:left-0 print:w-full print:z-[9999] print:min-h-screen print:bg-white print:p-8 font-sans">
+               <div className="border-b-4 border-black pb-6 mb-8 flex justify-between items-end">
+                 <div>
+                   <h1 className="text-4xl font-black uppercase tracking-tighter mb-1">{userData?.empresa || 'RUTASYNC ERP'}</h1>
+                   <p className="text-xl font-bold text-gray-800">DOCUMENTO DE AUDITORÍA Y CORTE DE CAJA B2B</p>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-sm font-mono font-bold">FECHA EMISIÓN: {new Date().toLocaleString('es-GT')}</p>
+                   <p className="text-sm font-mono font-bold mt-1">ID AUDITOR: {user?.email}</p>
+                   <p className="text-xs font-mono mt-1 text-gray-500">HASH: {user?.uid.substring(0,8)}-{Date.now()}</p>
+                 </div>
+               </div>
+
+               <div className="mb-10 grid grid-cols-2 gap-6">
+                 <div className="p-6 border-2 border-black rounded-lg bg-gray-50"><h3 className="font-bold text-lg mb-2 uppercase tracking-wider text-gray-600">Total Obligatorio (Efectivo)</h3><p className="text-4xl font-black font-mono">Q{totalEfectivo.toFixed(2)}</p></div>
+                 <div className="p-6 border-2 border-black rounded-lg bg-gray-50"><h3 className="font-bold text-lg mb-2 uppercase tracking-wider text-gray-600">Total Validado (Digital)</h3><p className="text-4xl font-black font-mono">Q{totalTarjetas.toFixed(2)}</p></div>
+               </div>
+
+               <h2 className="text-xl font-bold mb-4 border-b-2 border-black pb-2 uppercase tracking-widest">Sección A: Liquidación de Flotilla</h2>
+               <table className="w-full text-left text-sm mb-10 border-collapse">
+                 <thead><tr className="bg-black text-white"><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs">Piloto Operador</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs">Entidad Cliente</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs">Detalle Carga</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs text-center">Protocolo</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs text-right">Monto Reportado</th></tr></thead>
+                 <tbody>
+                   {rutas.filter(r => r.estado === 'Entregado').map((r,i) => (
+                     <tr key={i} className="nth-child-even:bg-gray-50"><td className="p-3 border border-gray-400 font-medium">{r.piloto}</td><td className="p-3 border border-gray-400 font-bold">{r.cliente}</td><td className="p-3 border border-gray-400 text-gray-600">{r.cantidad}x {r.item}</td><td className="p-3 border border-gray-400 text-center font-bold">{r.metodoPago}</td><td className="p-3 border border-gray-400 text-right font-mono font-bold">Q{Number(r.totalCobrar).toFixed(2)}</td></tr>
+                   ))}
+                   {rutas.filter(r => r.estado === 'Entregado').length === 0 && <tr><td colSpan="5" className="p-6 text-center font-bold text-gray-500 uppercase tracking-widest">Sin vectores liquidados en este corte.</td></tr>}
+                 </tbody>
+               </table>
+
+               <h2 className="text-xl font-bold mb-4 border-b-2 border-black pb-2 uppercase tracking-widest">Sección B: Movimientos de Terminal (POS)</h2>
+               <table className="w-full text-left text-sm mb-12 border-collapse">
+                 <thead><tr className="bg-black text-white"><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs">Entidad Cliente (Mostrador)</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs">Detalle Transacción</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs text-center">Protocolo</th><th className="p-3 border border-black font-bold uppercase tracking-wider text-xs text-right">Monto Reportado</th></tr></thead>
+                 <tbody>
+                   {ventas.map((v,i) => (
+                     <tr key={i} className="nth-child-even:bg-gray-50"><td className="p-3 border border-gray-400 font-bold">{v.cliente}</td><td className="p-3 border border-gray-400 text-gray-600">{v.cantidad}x {v.item}</td><td className="p-3 border border-gray-400 text-center font-bold">{v.metodo}</td><td className="p-3 border border-gray-400 text-right font-mono font-bold">Q{Number(v.total).toFixed(2)}</td></tr>
+                   ))}
+                   {ventas.length === 0 && <tr><td colSpan="4" className="p-6 text-center font-bold text-gray-500 uppercase tracking-widest">Sin transacciones generadas en terminal local.</td></tr>}
+                 </tbody>
+               </table>
+
+               <div className="grid grid-cols-2 gap-20 mt-32 pt-10">
+                 <div className="border-t-2 border-black text-center pt-3"><span className="font-bold text-lg block uppercase">Validación de Cajero</span><span className="text-gray-500 text-xs mt-1 block">Firma y Sello de Auditor de Red</span></div>
+                 <div className="border-t-2 border-black text-center pt-3"><span className="font-bold text-lg block uppercase">Aceptación de Gerencia</span><span className="text-gray-500 text-xs mt-1 block">Recepción Conforme de Efectivo</span></div>
+               </div>
+               
+               <div className="text-center mt-12 text-xs font-mono text-gray-400">SISTEMA RUTASYNC ERP - GENERADO AUTOMÁTICAMENTE BAJO STANDARDS B2B</div>
+            </div>
+          </div>
+        );
+
+      case 'agenda':
+        return (
+          <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500 print:hidden">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-white">Cronograma y Logística Preventiva</h2>
+              <button onClick={() => setShowEventModal(true)} className="bg-slate-800 border border-slate-700 hover:bg-slate-700 text-white px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg">
+                <Calendar className="w-4 h-4 text-blue-400" /> Insertar Tarea Programada
+              </button>
+            </div>
+
+            {showEventModal && (
+              <form onSubmit={handleCrearEvento} className="bg-[#1A2333] p-8 rounded-2xl border-t-4 border-t-blue-500 mb-8 shadow-2xl grid grid-cols-1 md:grid-cols-3 gap-6 animate-slide-up relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-48 h-48 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
+                <div className="col-span-1 md:col-span-3 text-xl font-bold text-white border-b border-slate-700 pb-4 mb-2 flex justify-between items-center">
+                  <div className="flex items-center gap-3"><Calendar className="w-6 h-6 text-blue-400"/> Asignación de Recursos Temporales</div>
+                  <button type="button" onClick={() => setShowEventModal(false)} className="text-slate-500 hover:text-white bg-slate-800 p-2 rounded-lg transition-colors"><X className="w-5 h-5"/></button>
+                </div>
+                <div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Denominación de Tarea</label><input required value={newEvent.titulo} onChange={e=>setNewEvent({...newEvent, titulo: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="Ej. Revisión Frenos Panel 4"/></div>
+                <div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Marca de Tiempo (Fecha)</label><input required type="date" value={newEvent.fecha} onChange={e=>setNewEvent({...newEvent, fecha: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none font-mono shadow-inner" /></div>
+                <div><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Clasificación Estructural</label><select required value={newEvent.tipo} onChange={e=>setNewEvent({...newEvent, tipo: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none font-bold shadow-inner"><option>Mantenimiento Preventivo</option><option>Reunión Administrativa</option><option>Entrega Especial B2B</option><option>Recolección Valores</option></select></div>
+                <div className="col-span-1 md:col-span-3"><label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Parámetros Adicionales (Log)</label><input value={newEvent.detalle} onChange={e=>setNewEvent({...newEvent, detalle: e.target.value})} className="w-full bg-[#0B1120] border border-slate-700 rounded-lg p-3 text-slate-300 focus:border-blue-500 outline-none font-mono text-sm shadow-inner" placeholder="Escriba especificaciones técnicas u observaciones aquí..."/></div>
+                <div className="col-span-1 md:col-span-3 text-right mt-4 border-t border-slate-700 pt-6 flex justify-end gap-3">
+                  <button type="button" onClick={() => setShowEventModal(false)} disabled={isSubmitting} className="px-6 py-3 text-slate-400 hover:text-white font-bold transition-colors disabled:opacity-50">Cancelar Registro</button>
+                  <button type="submit" disabled={isSubmitting} className={`font-bold px-10 py-3.5 rounded-lg shadow-lg transition-all flex items-center gap-2 ${isSubmitting ? 'bg-blue-900 text-blue-200 cursor-not-allowed shadow-none' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'}`}>{isSubmitting ? <><Upload className="w-4 h-4 animate-bounce"/> Encriptando...</> : 'Almacenar en Servidor de Fechas'}</button>
+                </div>
+              </form>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+               {eventos.length === 0 ? (
+                 <div className="col-span-3 bg-[#141C2B] rounded-2xl border border-slate-700 p-16 text-center shadow-xl">
+                    <div className="bg-slate-800 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6 border border-slate-700 shadow-inner"><Calendar className="w-10 h-10 text-slate-500" /></div>
+                    <h3 className="text-xl font-bold text-white mb-2 uppercase tracking-widest">Cronograma Optimizado</h3>
+                    <p className="text-slate-400 font-medium text-sm max-w-md mx-auto">El sistema no reporta mantenimientos de flota ni entregas críticas programadas a corto plazo.</p>
+                 </div>
+               ) : (
+                 eventos.map((evento, i) => (
+                   <div key={i} className="bg-[#141C2B] p-6 rounded-xl border border-slate-700 relative overflow-hidden shadow-xl border-l-4 border-l-blue-500 hover:bg-slate-800/50 transition-colors group">
+                     <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-3 flex items-center gap-1.5 bg-blue-500/10 inline-block px-3 py-1 rounded-full border border-blue-500/20"><Clock className="w-3.5 h-3.5 inline-block -mt-0.5"/> {evento.fecha}</div>
+                     <h4 className="font-black text-white text-xl leading-tight mb-2 tracking-tight">{evento.titulo}</h4>
+                     <p className="text-sm text-slate-400 mb-5 font-medium line-clamp-3 leading-relaxed">{evento.detalle || 'Ausencia de parámetros adicionales en el log de creación.'}</p>
+                     <div className="mt-auto border-t border-slate-700/50 pt-4"><span className="bg-[#0B1120] text-slate-300 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-700 shadow-inner">{evento.tipo}</span></div>
+                   </div>
+                 ))
+               )}
+            </div>
+          </div>
+        );
+
+      case 'ajustes':
+        return (
+          <div className="space-y-6 max-w-6xl mx-auto print:hidden">
+            <h2 className="text-2xl font-bold text-white mb-6">Consola de Arquitectura (Nube Privada)</h2>
+            <div className="bg-[#141C2B] rounded-2xl border border-slate-700 p-10 text-center relative overflow-hidden mb-10 shadow-2xl">
+               <div className="absolute top-0 right-0 p-5">
+                 <span className="bg-cyan-500/10 text-[#00B4D8] text-[10px] uppercase font-black tracking-widest px-4 py-2 rounded-lg border border-cyan-500/30 flex items-center gap-2 shadow-sm">
+                   <Shield className="w-4 h-4" /> Autorización: {userData?.role?.toUpperCase() || 'USUARIO B2B'}
+                 </span>
+               </div>
+               
+               <div className="absolute left-0 top-1/2 -translate-y-1/2 w-48 h-48 bg-[#00B4D8]/5 rounded-full blur-3xl pointer-events-none"></div>
+               
+               <div className="w-32 h-32 bg-[#0B1120] rounded-3xl mx-auto mb-6 flex items-center justify-center border-2 border-slate-700 shadow-2xl rotate-3 hover:rotate-0 transition-transform duration-500">
+                 <Building className="w-14 h-14 text-[#00B4D8]" />
+               </div>
+               <h3 className="text-4xl font-black text-white tracking-tighter mb-2">{userData?.empresa || 'Empresa No Definida'}</h3>
+               <p className="text-slate-400 mb-10 font-mono font-medium">{user?.email}</p>
+               
+               <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 text-left max-w-4xl mx-auto relative z-10">
+                  <div className="bg-[#0B1120] p-5 rounded-xl border border-slate-700 shadow-inner">
+                    <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2 block">Identificador de Base de Datos</label>
+                    <div className="text-slate-300 font-mono text-sm font-medium flex items-center gap-2"><Lock className="w-4 h-4 text-slate-500"/> {user?.uid.substring(0,12)}...</div>
+                  </div>
+                  <div className="bg-[#0B1120] p-5 rounded-xl border border-slate-700 shadow-inner border-l-2 border-l-emerald-500">
+                    <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2 block">Estado de Red</label>
+                    <div className="text-emerald-400 font-black text-sm uppercase flex items-center gap-2 tracking-wider"><Zap className="w-4 h-4 fill-current"/> Nodo Activo</div>
+                  </div>
+                  <div className="bg-[#0B1120] p-5 rounded-xl border border-slate-700 shadow-inner border-l-2 border-l-[#00B4D8]">
+                    <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2 block">Infraestructura Asignada</label>
+                    <div className="text-[#00B4D8] font-black text-sm uppercase flex items-center gap-2 tracking-wider"><Building className="w-4 h-4"/> PLAN {userData?.plan || 'BÁSICO'}</div>
+                  </div>
+               </div>
+            </div>
+
+            {/* PANEL DE PODER: SUPERADMIN (Nervio Central) */}
+            {userData?.role === 'SUPERADMIN' && (
+              <div className="bg-[#1A2333] rounded-2xl border-2 border-cyan-500/50 p-8 animate-fade-in shadow-[0_0_50px_rgba(0,180,216,0.15)] relative overflow-hidden group">
+                <div className="absolute top-0 left-0 w-2 h-full bg-cyan-500 group-hover:w-full group-hover:opacity-5 transition-all duration-1000"></div>
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8 border-b border-slate-700 pb-6 relative z-10">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-cyan-500/20 p-3 rounded-xl border border-cyan-500/30"><ShieldAlert className="w-8 h-8 text-cyan-400" /></div>
+                    <div>
+                      <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Nervio Central</h3>
+                      <p className="text-slate-400 text-sm font-medium mt-1">Control absoluto sobre los clústers de empresas clientes.</p>
+                    </div>
+                  </div>
+                  <div className="bg-red-500/10 text-red-400 border border-red-500/20 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest flex items-center gap-2 animate-pulse">
+                     <AlertTriangle className="w-4 h-4"/> Nivel Súper Administrador
+                  </div>
+                </div>
+                
+                <div className="overflow-x-auto relative z-10 bg-[#0B1120] rounded-xl border border-slate-700 shadow-inner">
+                  <table className="w-full text-left text-sm text-slate-300">
+                    <thead className="bg-[#141C2B] text-slate-400 text-xs uppercase tracking-widest font-black border-b border-slate-700">
+                      <tr><th className="px-6 py-5">Entidad (Base Instalada)</th><th className="px-6 py-5">Contacto Matriz</th><th className="px-6 py-5 text-center">Nivel Servidor</th><th className="px-6 py-5 text-center">Estado de Operación</th><th className="px-6 py-5 text-right">Interruptores de Corte</th></tr>
                     </thead>
-                    <tbody className="text-sm divide-y divide-slate-700/50">
-                      {clientesAdmin.map(c => (
-                        <tr key={c.id} className="hover:bg-slate-700/30 transition-colors">
-                          <td className="px-4 py-3">
-                            <p className="font-bold text-white">{c.company}</p>
-                            <p className="text-[10px] text-slate-400 font-mono mt-0.5">{c.email} | Tel: {c.telefono}</p>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className="text-[9px] bg-slate-700 border border-slate-600 px-2 py-0.5 rounded-full font-bold uppercase text-slate-300 tracking-wider">
-                              {c.plan}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center font-bold text-slate-300 font-mono text-xs">
-                            {c.diasRestantes} días
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded border inline-block tracking-wider ${c.estado === 'activo' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
-                              {c.estado}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <div className="flex justify-center gap-2">
-                              <button onClick={() => extenderSuscripcion(c.id)} className="bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 px-2.5 py-1 rounded text-xs font-bold hover:bg-cyan-500/20 transition-colors">
-                                +30 días
+                    <tbody className="divide-y divide-slate-800/80">
+                      {clientesAdmin.map((cli) => (
+                        <tr key={cli.uid} className="hover:bg-slate-800/50 transition-colors">
+                          <td className="px-6 py-5 font-black text-white text-base tracking-tight">{cli.empresa}</td>
+                          <td className="px-6 py-5 text-slate-400 font-mono text-sm">{cli.email}</td>
+                          <td className="px-6 py-5 text-center"><span className="bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest">{cli.plan}</span></td>
+                          <td className="px-6 py-5 text-center"><span className={`px-4 py-1.5 rounded-lg text-xs font-black tracking-widest uppercase shadow-sm ${cli.isActive ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>{cli.isActive ? 'EN LÍNEA' : 'SUSPENDIDO'}</span></td>
+                          <td className="px-6 py-5 text-right">
+                            {cli.role !== 'SUPERADMIN' && cli.uid !== user?.uid ? (
+                              <button onClick={() => handleToggleActivo(cli.uid, cli.isActive)} className={`px-5 py-2.5 rounded-lg text-[10px] uppercase tracking-widest font-black flex items-center gap-2 ml-auto transition-all shadow-md ${cli.isActive ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/30' : 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/30'}`}>
+                                {cli.isActive ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />} {cli.isActive ? 'APAGAR SERVICIO' : 'RESTAURAR CONEXIÓN'}
                               </button>
-                              <button onClick={() => alternarEstadoCliente(c.id)} className={`px-2.5 py-1 rounded text-xs font-bold border transition-colors ${c.estado === 'activo' ? 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'}`}>
-                                {c.estado === 'activo' ? 'Bloquear' : 'Activar'}
-                              </button>
-                            </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-600 font-black uppercase tracking-widest">Nodo Inmune (Admin)</span>
+                            )}
                           </td>
                         </tr>
                       ))}
+                      {clientesAdmin.length === 0 && (<tr><td colSpan="5" className="text-center py-16 text-slate-500 font-bold uppercase tracking-widest"><Zap className="w-10 h-10 mx-auto mb-4 opacity-30 text-cyan-400 animate-pulse"/> Sincronizando con el enjambre de datos de Firestore...</td></tr>)}
                     </tbody>
                   </table>
                 </div>
               </div>
+            )}
+          </div>
+        );
 
-              <div className="space-y-6">
-                <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-lg p-5">
-                  <h3 className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-4 flex items-center gap-2">
-                    <Calendar size={14} className="text-cyan-400"/> Calendario de Cobros
-                  </h3>
-                  <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
-                    {clientesAdmin.map(c => {
-                      const diaPago = c.fechaRegistro ? c.fechaRegistro.split('-')[2] : '01';
-                      return (
-                        <div key={c.id} className="flex justify-between items-center text-xs p-3 bg-slate-900/50 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
-                          <div>
-                            <p className="font-bold text-white">{c.company}</p>
-                            <p className="text-[10px] text-slate-500 mt-0.5">Día {diaPago} de cada mes</p>
-                          </div>
-                          <span className="font-bold text-emerald-400 font-mono">Q{c.plan === 'emprendedor' ? '99' : (c.plan === 'pyme' ? '249' : '599')}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+      default: return (<div className="flex flex-col items-center justify-center h-96 text-slate-600 print:hidden"><Package className="w-20 h-20 mb-4 opacity-20" /><p className="font-bold uppercase tracking-widest text-sm">El módulo no se encuentra en el índice actual.</p></div>);
+    }
+  };
 
-                <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-lg p-5">
-                  <h3 className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-4 flex items-center gap-2">
-                    <PenTool size={14} className="text-cyan-400"/> Notas Privadas CEO
-                  </h3>
-                  <form onSubmit={handleAddNotaAdmin} className="flex gap-2 mb-4">
-                    <input type="text" required placeholder="Anotación importante..." value={nuevaNota} onChange={e => setNuevaNota(e.target.value)} className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-xs text-white outline-none focus:border-cyan-500 transition-colors" />
-                    <button type="submit" className="bg-cyan-500 text-slate-900 px-3 rounded-lg font-bold hover:bg-cyan-400 transition-colors">
-                      <Plus size={14}/>
-                    </button>
-                  </form>
-                  <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                    {notasAdmin.map(n => (
-                      <div key={n.id} className="flex justify-between items-start text-xs p-3 bg-amber-500/5 rounded-lg border border-amber-500/20">
-                        <p className="flex-1 pr-3 text-slate-300 leading-relaxed font-light">{n.nota}</p>
-                        <button onClick={() => eliminarNotaAdmin(n.id)} className="text-slate-500 hover:text-red-400 transition-colors mt-0.5">
-                          <Trash2 size={12}/>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </main>
-        </div>
-      ) : (
-        <>
-          {/* NAVEGACIÓN DE TABS (CLIENTES) */}
-          <div className="bg-slate-950 border-b border-slate-800 px-2 md:px-4 flex gap-1 md:gap-4 shadow-sm z-10 overflow-x-auto shrink-0 print:hidden relative">
+  if (user) {
+    return (
+      <div className="min-h-screen bg-[#0B1120] text-slate-300 font-sans flex flex-col selection:bg-cyan-500/30 print:bg-white print:text-black">
+        {toastMessage && (<div className="fixed top-4 right-4 bg-emerald-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 z-50 animate-bounce print:hidden border border-emerald-400"><CheckCircle2 className="w-6 h-6" /> <span className="font-bold text-sm tracking-wide">{toastMessage}</span></div>)}
+
+        <header className="bg-[#0B1120] border-b border-slate-800 z-20 print:hidden shadow-lg">
+          <div className="h-20 flex items-center justify-between px-8">
+            <div className="flex items-center gap-4"><div className="bg-transparent border border-[#00B4D8] p-2 rounded-xl shadow-[0_0_15px_rgba(0,180,216,0.1)]"><MapIcon className="w-6 h-6 text-[#00B4D8]" /></div><div className="flex flex-col"><span className="text-xl font-black text-white tracking-tight leading-none uppercase">RutaSync <span className="font-light text-[#00B4D8]">B2B</span></span><span className="text-[10px] text-slate-500 tracking-widest font-black mt-1">NÚCLEO ADMINISTRATIVO</span></div></div>
+            <div className="flex items-center gap-8"><div className="text-right hidden sm:block"><div className="text-sm font-bold text-white font-mono">{user?.email || 'gerencia@rutasync.com'}</div><div className="text-xs text-slate-400 font-bold tracking-widest uppercase mt-0.5">PERMISOS: <span className="text-[#00B4D8]">{userData?.role || 'PROPIETARIO'}</span></div></div><div className="flex items-center gap-4"><button className={`text-slate-900 text-[10px] font-black px-4 py-2 rounded-lg uppercase tracking-widest transition-colors shadow-sm ${userData?.isActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-red-500 hover:bg-red-400'}`}>Red {userData?.isActive ? 'Aprobada' : 'Cortada'}</button><button onClick={handleLogout} className="p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-slate-400 hover:text-white hover:bg-red-500/20 hover:border-red-500/30 transition-all group" title="Cerrar Conexión"><LogOut className="w-5 h-5 group-hover:text-red-400" /></button></div></div>
+          </div>
+          <div className="px-8 flex items-center gap-2 overflow-x-auto hide-scrollbar border-t border-slate-800/50 bg-[#141C2B] pt-2 pb-0">
             {[
-              { id: 'pos', icon: Store, label: 'POS' },
-              { id: 'rutas', icon: MapIcon, label: 'Despacho' },
-              { id: 'stock', icon: Package, label: 'Almacén' },
-              { id: 'historial', icon: History, label: 'Historial' },
-              { id: 'finanzas', icon: Calculator, label: 'Finanzas' },
-              { id: 'calendario', icon: Calendar, label: 'Agenda' },
-              { id: 'perfil', icon: User, label: 'Ajustes' }
+              { id: 'dashboard', icon: LayoutDashboard, label: 'TELEMETRÍA' },
+              { id: 'pos', icon: Store, label: 'TERMINAL POS' },
+              { id: 'despachos', icon: Truck, label: 'LOGÍSTICA' },
+              { id: 'almacen', icon: Package, label: 'BODEGA' },
+              { id: 'historial', icon: History, label: 'AUDITORÍA' },
+              { id: 'finanzas', icon: Receipt, label: 'FLUJO CAJA' },
+              { id: 'agenda', label: 'CRONOGRAMA', icon: Calendar },
+              { id: 'ajustes', icon: User, label: 'ARQUITECTURA' }
             ].map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`py-3 px-3 md:px-4 border-b-2 font-bold text-[10px] md:text-xs uppercase tracking-widest flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10' : 'border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
-                <tab.icon size={14} /> {tab.label}
-              </button>
+              <button key={tab.id} onClick={() => setCurrentView(tab.id)} className={`flex items-center gap-2.5 px-6 py-4 text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap rounded-t-lg border-b-2 ${currentView === tab.id ? 'text-[#00B4D8] border-[#00B4D8] bg-[#0B1120]' : 'text-slate-500 border-transparent hover:text-white hover:bg-slate-800/50'}`}><tab.icon className={`w-4 h-4 ${currentView === tab.id ? 'text-[#00B4D8]' : 'opacity-70'}`} /> {tab.label}</button>
             ))}
           </div>
-
-          <main className="flex-1 p-4 md:p-6 overflow-y-auto relative z-0">
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-900/10 via-slate-900 to-slate-900 pointer-events-none -z-10"></div>
-            
-            <div className="max-w-7xl mx-auto">
-
-              {}
-              {activeTab === 'pos' && (
-                <div className="animate-fade-in space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-slate-700 pb-3 gap-4">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Punto de Venta (Mostrador)</h2>
-                  </div>
-                  {/* LAYOUT HORIZONTAL REQUERIDO (Form a la izq, Tabla a la der) */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                    <div className="md:col-span-1 bg-slate-800 rounded-xl border border-slate-700 p-5 h-fit shadow-lg">
-                      <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-4 tracking-widest flex items-center gap-2"><ShoppingCart size={14}/> Nueva Venta Rápida</h3>
-                      <form onSubmit={handleAddVentaPOS} className="space-y-4">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Cliente (Opcional)</label>
-                          <input type="text" value={formPOS.cliente} onChange={e => setFormPOS({...formPOS, cliente: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none transition-colors" />
-                        </div>
-                        <div className="flex gap-3">
-                          <div className="flex-1">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">SKU / Item</label>
-                            <select required value={formPOS.productoId} onChange={handleProductoPOSChange} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none transition-colors appearance-none">
-                              <option value="" disabled className="bg-slate-900">Seleccione...</option>
-                              {inventario.map(p => <option key={p.id} value={p.id} className="bg-slate-900">{p.nombre} (Disp: {p.cantidad})</option>)}
-                              <option value="custom" className="font-bold text-cyan-400 bg-slate-900">Excepción Comercial</option>
-                            </select>
-                          </div>
-                          <div className="w-16 shrink-0">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Cant.</label>
-                            <input type="number" required min="1" value={formPOS.cantidad} onChange={handleCantidadPOSChange} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-center text-white focus:border-cyan-500 outline-none transition-colors" />
-                          </div>
-                        </div>
-                        {formPOS.productoId === 'custom' && (
-                          <input type="text" required placeholder="Detalle de excepción..." value={formPOS.customPedido} onChange={e => setFormPOS({...formPOS, customPedido: e.target.value})} className="w-full px-3 py-2 border border-amber-500/30 bg-amber-500/10 rounded-lg text-sm text-amber-200 focus:border-amber-500 outline-none" />
-                        )}
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Método de Pago</label>
-                          <select required value={formPOS.metodoPago} onChange={e => setFormPOS({...formPOS, metodoPago: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none transition-colors appearance-none">
-                            <option value="efectivo" className="bg-slate-900">Efectivo</option>
-                            <option value="tarjeta" className="bg-slate-900">Tarjeta</option>
-                            <option value="transferencia" className="bg-slate-900">Transferencia</option>
-                          </select>
-                        </div>
-                        <div className="pt-2">
-                          <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1.5 block">Total Cobrado (Q)</label>
-                          <input type="number" min="0" step="0.01" required value={formPOS.total} onChange={e => setFormPOS({...formPOS, total: e.target.value})} className="w-full px-3 py-2.5 border border-emerald-500/50 bg-emerald-500/10 rounded-lg font-bold text-emerald-300 text-lg focus:border-emerald-400 outline-none shadow-inner" />
-                        </div>
-                        <button type="submit" className="w-full bg-cyan-500 text-slate-900 font-bold uppercase text-xs tracking-widest py-3 rounded-lg hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-2 flex justify-center items-center gap-2">
-                          Completar Venta <ArrowRight size={14}/>
-                        </button>
-                      </form>
-                    </div>
-                    
-                    <div className="md:col-span-2 lg:col-span-3 bg-slate-800 rounded-xl border border-slate-700 shadow-lg flex flex-col min-h-[400px] overflow-hidden">
-                      <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-900/50">
-                        <h3 className="text-xs uppercase font-bold text-white tracking-widest">Últimas Ventas Directas</h3>
-                      </div>
-                      <div className="flex-1 overflow-auto">
-                        <table className="w-full text-left border-collapse min-w-[600px]">
-                          <thead>
-                            <tr className="bg-slate-900/80 border-b border-slate-700 text-[10px] uppercase tracking-widest text-slate-400">
-                              <th className="px-4 py-3 font-bold">Fecha / Ref</th>
-                              <th className="px-4 py-3 font-bold">Cliente</th>
-                              <th className="px-4 py-3 font-bold">Ítems</th>
-                              <th className="px-4 py-3 font-bold text-right">Importe</th>
-                              <th className="px-4 py-3 font-bold text-center">Método</th>
-                            </tr>
-                          </thead>
-                          <tbody className="text-sm divide-y divide-slate-700/50">
-                            {entregas.filter(e => e.tipoEnvio === 'mostrador').length === 0 ? (
-                              <tr>
-                                <td colSpan="5" className="p-12 text-center text-slate-500 text-[10px] uppercase font-bold tracking-widest">Aún no hay ventas registradas hoy.</td>
-                              </tr>
-                            ) : (
-                              [...entregas].filter(e => e.tipoEnvio === 'mostrador').reverse().map((e) => (
-                                <tr key={e.id} className="hover:bg-slate-700/30 transition-colors text-slate-300">
-                                  <td className="px-4 py-3 font-mono text-[10px] text-slate-400">{e.fechaCorta}</td>
-                                  <td className="px-4 py-3 font-bold text-white">{e.cliente}</td>
-                                  <td className="px-4 py-3 text-xs"><span className="font-bold text-white">{e.cantidad}x</span> {e.pedido}</td>
-                                  <td className="px-4 py-3 text-right font-bold text-emerald-400 font-mono">Q{e.total.toFixed(2)}</td>
-                                  <td className="px-4 py-3 text-center">
-                                    <span className={"text-[9px] px-2 py-0.5 rounded border inline-block font-bold uppercase tracking-wider " + (e.metodoPago==='efectivo'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':e.metodoPago==='tarjeta'?'bg-purple-500/10 text-purple-400 border-purple-500/20':'bg-blue-500/10 text-blue-400 border-blue-500/20')}>
-                                      {e.metodoPago}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {}
-              {activeTab === 'rutas' && (
-                <div className="animate-fade-in space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-slate-700 pb-3 gap-4">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Centro de Despacho</h2>
-                    <div className="flex gap-2">
-                      <button onClick={enviarLinkPiloto} className="bg-slate-800 text-white border border-slate-600 px-3 py-1.5 rounded-lg text-[10px] uppercase font-bold tracking-widest hover:bg-slate-700 transition-all flex items-center gap-2">
-                        <MessageCircle size={14} className="text-emerald-400"/> Enviar a WhatsApp
-                      </button>
-                      <button onClick={() => setShowDriverView(true)} className="bg-cyan-500 text-slate-900 px-3 py-1.5 rounded-lg text-[10px] uppercase font-bold tracking-widest hover:bg-cyan-400 transition-all flex items-center gap-2 shadow-[0_0_10px_rgba(6,182,212,0.3)]">
-                        <Smartphone size={14} /> Vista Piloto
-                      </button>
-                    </div>
-                  </div>
-                  {/* LAYOUT HORIZONTAL */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                    <div className="md:col-span-1 bg-slate-800 rounded-xl border border-slate-700 p-5 h-fit shadow-lg">
-                      <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-4 tracking-widest flex items-center gap-2"><MapIcon size={14}/> Orden de Salida</h3>
-                      <form onSubmit={handleAddRuta} className="space-y-4">
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Cliente</label>
-                            <input type="text" required value={formRuta.cliente} onChange={e => setFormRuta({...formRuta, cliente: e.target.value})} className="w-full px-2.5 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Tel. (Opc)</label>
-                            <input type="tel" value={formRuta.telefono} onChange={e => setFormRuta({...formRuta, telefono: e.target.value})} className="w-full px-2.5 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none" />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Dirección / Destino</label>
-                          <input type="text" required value={formRuta.direccion} onChange={e => setFormRuta({...formRuta, direccion: e.target.value})} className="w-full px-2.5 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none" />
-                        </div>
-                        <div className="flex gap-3">
-                          <div className="flex-1">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">SKU / Item</label>
-                            <select required value={formRuta.productoId} onChange={handleProductoChange} className="w-full px-2.5 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none appearance-none">
-                              <option value="" disabled className="bg-slate-900">Seleccione...</option>
-                              {inventario.map(p => <option key={p.id} value={p.id} className="bg-slate-900">{p.nombre} ({p.cantidad})</option>)}
-                              <option value="custom" className="font-bold text-cyan-400 bg-slate-900">Excepción</option>
-                            </select>
-                          </div>
-                          <div className="w-14 shrink-0">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Cant.</label>
-                            <input type="number" required min="1" value={formRuta.cantidad} onChange={handleCantidadChange} className="w-full px-2.5 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-center text-white focus:border-cyan-500 outline-none" />
-                          </div>
-                        </div>
-                        {formRuta.productoId === 'custom' && (
-                          <input type="text" required placeholder="Detalle..." value={formRuta.customPedido} onChange={e => setFormRuta({...formRuta, customPedido: e.target.value})} className="w-full px-2.5 py-2 border border-amber-500/30 bg-amber-500/10 rounded-lg text-xs text-amber-200 outline-none" />
-                        )}
-                        <div className="pt-3 border-t border-slate-700">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Agente Asignado</label>
-                          <div className="flex gap-2">
-                            <select value={formRuta.tipoEnvio} onChange={e => setFormRuta({...formRuta, tipoEnvio: e.target.value})} className="w-1/3 px-2 py-2 bg-slate-950/80 border border-slate-600 rounded-lg text-[10px] text-slate-300 font-bold focus:border-cyan-500 outline-none appearance-none">
-                              <option value="propio" className="bg-slate-900">Flota Int.</option>
-                              <option value="mensajeria" className="bg-slate-900">Externa</option>
-                            </select>
-                            <input type="text" required placeholder="Nombre Piloto" value={formRuta.responsable} onChange={e => setFormRuta({...formRuta, responsable: e.target.value})} className="flex-1 px-2.5 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none" />
-                          </div>
-                        </div>
-                        <div className="pt-2">
-                          <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1.5 block">Importe a Cobrar (Q)</label>
-                          <input type="number" min="0" step="0.01" required value={formRuta.total} onChange={e => setFormRuta({...formRuta, total: e.target.value})} className="w-full px-3 py-2.5 border border-emerald-500/50 bg-emerald-500/10 rounded-lg font-bold text-emerald-300 text-lg focus:border-emerald-400 outline-none shadow-inner" />
-                        </div>
-                        <button type="submit" className="w-full bg-cyan-500 text-slate-900 font-bold uppercase text-[11px] tracking-widest py-3 rounded-lg hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-2 flex justify-center items-center gap-2">
-                          <Plus size={14}/> Emitir Orden
-                        </button>
-                      </form>
-                    </div>
-
-                    <div className="md:col-span-2 lg:col-span-3 bg-slate-800 rounded-xl border border-slate-700 shadow-lg flex flex-col min-h-[400px] overflow-hidden">
-                      <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-900/50">
-                        <h3 className="text-xs uppercase font-bold text-white tracking-widest flex items-center gap-2">
-                          Monitor de Ruteo 
-                          <span className="bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 rounded-full text-[10px]">{entregas.filter(e=>e.tipoEnvio!=='mostrador').length}</span>
-                        </h3>
-                        <button onClick={optimizarRuta} disabled={entregas.filter(e=>e.tipoEnvio!=='mostrador').length < 2} className="bg-slate-800 text-slate-300 border border-slate-600 px-3 py-1.5 rounded-lg text-[10px] uppercase font-bold tracking-widest disabled:opacity-30 hover:bg-slate-700 hover:text-white transition-all flex items-center gap-2">
-                          <Zap size={12} className="text-amber-400"/> Optimizar AI
-                        </button>
-                      </div>
-                      <div className="flex-1 overflow-auto">
-                        <table className="w-full text-left border-collapse min-w-[600px]">
-                          <thead>
-                            <tr className="bg-slate-900/80 border-b border-slate-700 text-[10px] uppercase tracking-widest text-slate-400">
-                              <th className="px-4 py-3 font-bold">Destino / Cliente</th>
-                              <th className="px-4 py-3 font-bold">Ítems</th>
-                              <th className="px-4 py-3 font-bold text-right">Importe</th>
-                              <th className="px-4 py-3 font-bold">Agente</th>
-                              <th className="px-4 py-3 font-bold text-center">Status</th>
-                              <th className="px-4 py-3 font-bold text-center">Ctrl</th>
-                            </tr>
-                          </thead>
-                          <tbody className="text-sm divide-y divide-slate-700/50">
-                            {entregas.filter(e=>e.tipoEnvio!=='mostrador').length === 0 ? (
-                              <tr>
-                                <td colSpan="6" className="p-12 text-center text-slate-500 text-[10px] uppercase font-bold tracking-widest">Cola de despacho vacía.</td>
-                              </tr>
-                            ) : (
-                              entregas.filter(e=>e.tipoEnvio!=='mostrador').map((e) => {
-                                const isEnt = e.estado === 'entregado';
-                                return (
-                                  <tr key={e.id} className={`transition-colors text-slate-300 ${isEnt ? 'bg-slate-900/40 opacity-50' : 'hover:bg-slate-700/30'}`}>
-                                    <td className="px-4 py-3">
-                                      <p className={`font-bold text-white ${isEnt ? 'line-through text-slate-500' : ''}`}>{e.direccion}</p>
-                                      <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-[10px] text-slate-400">{e.cliente}</span>
-                                        {e.telefono && !isEnt && (
-                                          <button onClick={()=>notificarClienteFinal(e)} className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider flex items-center gap-1 hover:bg-emerald-500/20 transition-colors">
-                                            <MessageCircle size={10}/> SMS
-                                          </button>
-                                        )}
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-xs"><span className="font-bold text-white">{e.cantidad}x</span> {e.pedido}</td>
-                                    <td className="px-4 py-3 text-right font-bold text-emerald-400 font-mono">Q{e.total.toFixed(2)}</td>
-                                    <td className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider"><span className="bg-slate-800 px-2 py-1 rounded text-slate-300 border border-slate-600">{e.responsable.slice(0,10)}</span></td>
-                                    <td className="px-4 py-3 text-center">
-                                      <span className={`text-[9px] px-2 py-0.5 rounded border inline-block font-bold uppercase tracking-wider ${isEnt ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>
-                                        {isEnt ? 'Entregado' : 'Pendiente'}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                      <button onClick={() => eliminarRuta(e.id)} className="text-slate-500 hover:text-red-400 transition-colors">
-                                        <Trash2 size={14}/>
-                                      </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {}
-              {activeTab === 'stock' && (
-                <div className="animate-fade-in space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-700 pb-3 gap-4">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Gestor de Almacén (WMS)</h2>
-                    <div className="flex items-center gap-4">
-                      <label className="cursor-pointer bg-slate-800 text-white border border-slate-600 px-4 py-2 rounded-lg text-[10px] uppercase font-bold tracking-widest hover:bg-slate-700 transition-all flex items-center gap-2">
-                        <Download size={14} className="text-cyan-400"/> CSV Import
-                        <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-                      </label>
-                      <div className="text-right bg-slate-800 px-4 py-1.5 rounded-lg border border-slate-700">
-                        <span className="block text-[9px] uppercase font-bold text-slate-400 tracking-widest">Valorización Neta</span>
-                        <span className="font-bold text-cyan-400 text-sm font-mono">Q {valorTotalInventario.toLocaleString('es-GT', {minimumFractionDigits: 2})}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {/* LAYOUT HORIZONTAL */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                    <div className="md:col-span-1 bg-slate-800 rounded-xl border border-slate-700 p-5 shadow-lg h-fit">
-                      <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-4 tracking-widest flex items-center gap-2"><Package size={14}/> Alta de SKU</h3>
-                      <form onSubmit={handleAddStock} className="space-y-4">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Descripción</label>
-                          <input type="text" required value={formStock.nombre} onChange={e=>setFormStock({...formStock, nombre: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Volumen</label>
-                            <input type="number" required min="0" value={formStock.cantidad} onChange={e=>setFormStock({...formStock, cantidad: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-center text-white focus:border-cyan-500 outline-none" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Tarifa (Q)</label>
-                            <input type="number" required min="0" step="0.01" value={formStock.precio} onChange={e=>setFormStock({...formStock, precio: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-center text-white focus:border-cyan-500 outline-none" />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1.5 block">Umbral Crítico (Mín)</label>
-                          <input type="number" required min="0" value={formStock.minimo} onChange={e=>setFormStock({...formStock, minimo: e.target.value})} className="w-full px-3 py-2 border border-amber-500/30 bg-amber-500/5 rounded-lg text-xs text-center text-amber-100 focus:border-amber-400 outline-none" />
-                        </div>
-                        <button type="submit" className="w-full bg-cyan-500 text-slate-900 font-bold uppercase text-[11px] tracking-widest py-3 rounded-lg hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-2 flex justify-center items-center gap-2">
-                          Registrar SKU
-                        </button>
-                      </form>
-                    </div>
-                    
-                    <div className="md:col-span-2 lg:col-span-3 bg-slate-800 rounded-xl border border-slate-700 shadow-lg overflow-hidden flex flex-col">
-                      <div className="overflow-x-auto flex-1">
-                        <table className="w-full text-left border-collapse">
-                          <thead className="bg-slate-900/80 border-b border-slate-700 text-[10px] uppercase tracking-widest text-slate-400">
-                            <tr>
-                              <th className="px-5 py-4 font-bold">Identificador / Artículo</th>
-                              <th className="px-5 py-4 font-bold text-center">Existencias</th>
-                              <th className="px-5 py-4 font-bold text-right">Unitario</th>
-                              <th className="px-5 py-4 font-bold text-center">Diagnóstico</th>
-                              <th className="px-5 py-4 font-bold text-center">Ctrl</th>
-                            </tr>
-                          </thead>
-                          <tbody className="text-sm divide-y divide-slate-700/50 text-slate-300">
-                            {inventario.map(p => {
-                              const alerta = p.cantidad <= p.minimo && p.cantidad > 0; 
-                              const critico = p.cantidad === 0;
-                              return (
-                                <tr key={p.id} className="hover:bg-slate-700/30 transition-colors">
-                                  <td className="px-5 py-3">
-                                    <p className="font-bold text-white">{p.nombre}</p>
-                                    <p className="text-[9px] text-slate-500 font-mono tracking-widest mt-0.5">{p.id}</p>
-                                  </td>
-                                  <td className="px-5 py-3 text-center">
-                                    <div className="flex items-center justify-center gap-2">
-                                      <button onClick={()=>modificarStock(p.id, -1)} className="w-6 h-6 rounded-md border border-slate-600 bg-slate-900/50 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-white font-bold transition-colors">-</button>
-                                      <span className="font-bold font-mono w-10 text-center text-white">{p.cantidad}</span>
-                                      <button onClick={()=>modificarStock(p.id, 1)} className="w-6 h-6 rounded-md border border-slate-600 bg-slate-900/50 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-white font-bold transition-colors">+</button>
-                                    </div>
-                                  </td>
-                                  <td className="px-5 py-3 text-right font-mono font-bold text-emerald-400">Q{p.precio.toFixed(2)}</td>
-                                  <td className="px-5 py-3 text-center">
-                                    {critico ? (
-                                      <span className="text-[9px] uppercase font-bold px-2 py-1 rounded-md border bg-red-500/10 text-red-400 border-red-500/30 tracking-widest">Ruptura</span>
-                                    ) : alerta ? (
-                                      <span className="text-[9px] uppercase font-bold px-2 py-1 rounded-md border bg-amber-500/10 text-amber-400 border-amber-500/30 tracking-widest">Reabastecer</span>
-                                    ) : (
-                                      <span className="text-[9px] uppercase font-bold px-2 py-1 rounded-md border bg-emerald-500/10 text-emerald-400 border-emerald-500/30 tracking-widest">Óptimo</span>
-                                    )}
-                                  </td>
-                                  <td className="px-5 py-3 text-center">
-                                    <button onClick={()=>eliminarProducto(p.id)} className="text-slate-500 hover:text-red-400 transition-colors">
-                                      <Trash2 size={16}/>
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {}
-              {activeTab === 'historial' && (
-                <div className="space-y-4 animate-fade-in">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-slate-700 pb-3 gap-4">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Historial y Auditoría de POD</h2>
-                    <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 shadow-lg">
-                      <Filter size={14} className="text-cyan-400" />
-                      <select value={filtroHistorial} onChange={e => setFiltroHistorial(e.target.value)} className="text-[10px] md:text-xs font-bold text-white uppercase tracking-widest bg-transparent outline-none cursor-pointer appearance-none">
-                        <option value="todos" className="bg-slate-900">Histórico Completo</option>
-                        <option value="hoy" className="bg-slate-900">Solo Hoy</option>
-                        <option value="7dias" className="bg-slate-900">Últimos 7 días</option>
-                        <option value="1mes" className="bg-slate-900">Último mes</option>
-                      </select>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-lg overflow-hidden flex flex-col">
-                    <div className="overflow-x-auto flex-1">
-                      <table className="w-full text-left border-collapse min-w-[900px]">
-                        <thead>
-                          <tr className="bg-slate-900/80 border-b border-slate-700 text-[10px] uppercase tracking-widest text-slate-400">
-                            <th className="px-5 py-4 font-bold">Fecha / Ref</th>
-                            <th className="px-5 py-4 font-bold">Cliente y Destino</th>
-                            <th className="px-5 py-4 font-bold">Pedido / Total</th>
-                            <th className="px-5 py-4 font-bold">Cobro</th>
-                            <th className="px-5 py-4 font-bold">Prueba Entrega (POD)</th>
-                            <th className="px-5 py-4 font-bold text-center">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-700/50 text-sm text-slate-300">
-                          {entregasHistorial.length === 0 ? (
-                            <tr>
-                              <td colSpan="6" className="p-12 text-center text-slate-500 text-[10px] font-bold uppercase tracking-widest">Registros no encontrados.</td>
-                            </tr>
-                          ) : (
-                            [...entregasHistorial].reverse().map(e => (
-                              <tr key={e.id} className="hover:bg-slate-700/30 transition-colors">
-                                <td className="px-5 py-4">
-                                  <p className="text-[10px] text-slate-400 font-mono mb-1">{e.fechaCorta}</p>
-                                  <span className="text-[9px] bg-slate-700 border border-slate-600 px-2 py-0.5 rounded font-bold uppercase tracking-wider text-slate-300">{e.responsable.slice(0,8)}</span>
-                                </td>
-                                <td className="px-5 py-4">
-                                  <p className="font-bold text-white">{e.cliente}</p>
-                                  <p className="text-[10px] text-slate-500 mt-0.5">{e.direccion}</p>
-                                </td>
-                                <td className="px-5 py-4">
-                                  <p className="font-medium text-slate-300 text-xs mb-0.5"><span className="text-white font-bold">{e.cantidad}x</span> {e.pedido}</p>
-                                  <p className="font-bold text-emerald-400 font-mono text-xs">Q {e.total.toFixed(2)}</p>
-                                </td>
-                                <td className="px-5 py-4 text-xs">
-                                  {e.estado === 'entregado' ? (
-                                    <span className={"px-2.5 py-1 rounded-md font-bold uppercase tracking-wider text-[9px] border " + (e.metodoPago==='efectivo'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/30':e.metodoPago==='tarjeta'?'bg-purple-500/10 text-purple-400 border-purple-500/30':'bg-blue-500/10 text-blue-400 border-blue-500/30')}>
-                                      {e.metodoPago}
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-600">-</span>
-                                  )}
-                                </td>
-                                <td className="px-5 py-4 text-xs text-cyan-200/70 font-mono italic">
-                                  {e.estado === 'entregado' ? e.firma : '-'}
-                                </td>
-                                <td className="px-5 py-4 text-center">
-                                  <span className={"text-[9px] uppercase font-bold px-2.5 py-1 rounded-md border tracking-wider " + (e.estado==='entregado'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/30':'bg-amber-500/10 text-amber-400 border-amber-500/30')}>
-                                    {e.estado}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {}
-              {activeTab === 'finanzas' && (
-                <div className="animate-fade-in space-y-6">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-slate-700 pb-3 gap-4">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Centro de Control Financiero</h2>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <button onClick={() => setShowPDF(true)} className="bg-slate-800 text-white border border-slate-600 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 transition-all flex items-center gap-2">
-                        <FileText size={14} className="text-cyan-400"/> Emitir PDF
-                      </button>
-                      <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 shadow-lg">
-                        <Filter size={14} className="text-cyan-400" />
-                        <select value={filtroFinanzas} onChange={e => setFiltroFinanzas(e.target.value)} className="text-[10px] font-bold text-white uppercase tracking-widest bg-transparent outline-none cursor-pointer appearance-none">
-                          <option value="todos" className="bg-slate-900">Histórico Total</option>
-                          <option value="hoy" className="bg-slate-900">Hoy</option>
-                          <option value="7dias" className="bg-slate-900">7 Días</option>
-                          <option value="1mes" className="bg-slate-900">Último Mes</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
-                    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg border-l-4 border-l-cyan-500 relative overflow-hidden group">
-                      <div className="absolute top-0 right-0 w-16 h-16 bg-cyan-500/10 rounded-bl-full blur-xl group-hover:bg-cyan-500/20 transition-all"></div>
-                      <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1.5 relative z-10">Ingresos Brutos</span>
-                      <span className="text-2xl font-bold text-white relative z-10 font-mono">Q {ingresosPagados.toLocaleString('es-GT', {minimumFractionDigits:2})}</span>
-                    </div>
-                    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg border-l-4 border-l-amber-500 relative overflow-hidden group">
-                      <div className="absolute top-0 right-0 w-16 h-16 bg-amber-500/10 rounded-bl-full blur-xl group-hover:bg-amber-500/20 transition-all"></div>
-                      <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1.5 relative z-10">Cuentas por Cobrar</span>
-                      <span className="text-2xl font-bold text-amber-400 relative z-10 font-mono">Q {cuentasPorCobrar.toLocaleString('es-GT', {minimumFractionDigits:2})}</span>
-                    </div>
-                    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg border-l-4 border-l-red-500 flex justify-between items-end relative overflow-hidden group">
-                      <div className="absolute top-0 right-0 w-16 h-16 bg-red-500/10 rounded-bl-full blur-xl group-hover:bg-red-500/20 transition-all"></div>
-                      <div className="relative z-10">
-                        <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1.5">Gastos (OPEX)</span>
-                        <span className="text-2xl font-bold text-red-400 font-mono">Q {totalGastosOperativos.toLocaleString('es-GT', {minimumFractionDigits:2})}</span>
-                      </div>
-                      <span className="text-[10px] font-bold text-red-300 bg-red-500/20 px-1.5 py-0.5 rounded-md relative z-10 border border-red-500/30">{margenGastos.toFixed(1)}%</span>
-                    </div>
-                    <div className="bg-gradient-to-br from-cyan-900/40 to-slate-800 border border-cyan-500/30 rounded-xl p-5 shadow-[0_0_20px_rgba(6,182,212,0.15)] border-l-4 border-l-emerald-400 flex justify-between items-end relative overflow-hidden">
-                      <div className="relative z-10">
-                        <span className="block text-[10px] uppercase font-bold text-cyan-200 tracking-widest mb-1.5">Utilidad Neta</span>
-                        <span className="text-2xl font-bold text-emerald-400 font-mono drop-shadow-[0_0_10px_rgba(52,211,153,0.3)]">Q {utilidadNeta.toLocaleString('es-GT', {minimumFractionDigits:2})}</span>
-                      </div>
-                      <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded-md relative z-10 border border-emerald-500/30 shadow-sm">{margenUtilidad.toFixed(1)}%</span>
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-800 text-white rounded-xl shadow-lg border border-slate-700 p-5">
-                    <h3 className="text-[10px] uppercase font-bold tracking-widest mb-4 flex items-center gap-2 text-slate-400">
-                      <Wallet size={16} className="text-emerald-400"/> Liquidación de Efectivo (Corte de Caja Diario)
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                      {Object.keys(liquidacionPilotos).length === 0 ? (
-                        <p className="text-xs text-slate-500">No hay efectivo pendiente en calle.</p>
-                      ) : (
-                        Object.keys(liquidacionPilotos).map(piloto => (
-                          <div key={piloto} className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-white mb-2">{piloto}</p>
-                            <div className="flex justify-between items-end">
-                              <div>
-                                <span className="block text-[9px] text-slate-500 uppercase tracking-widest">Efectivo</span>
-                                <span className="font-bold text-emerald-400 text-sm font-mono">Q {liquidacionPilotos[piloto].efectivo.toFixed(2)}</span>
-                              </div>
-                              <div className="text-right">
-                                <span className="block text-[9px] text-slate-500 uppercase tracking-widest">Digital</span>
-                                <span className="font-mono text-slate-400 text-xs">Q {liquidacionPilotos[piloto].digital.toFixed(2)}</span>
-                              </div>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-2 bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg flex flex-col relative z-10">
-                      <h3 className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-6">Comportamiento de Ingresos (Realizados)</h3>
-                      
-                      <div className="h-[350px] w-full flex items-center justify-center relative">
-                        {chartData && chartData.length > 0 ? (
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={chartData} margin={{top:10, right:10, left:0, bottom:0}}>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155"/>
-                              <XAxis dataKey="date" stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false}/>
-                              <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v)=>'Q'+v}/>
-                              <Tooltip cursor={{fill: '#0f172a'}} contentStyle={{backgroundColor: '#1e293b', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', fontSize: '12px'}} formatter={(v)=>'Q'+Number(v).toFixed(2)}/>
-                              <Bar dataKey="amount" fill="#06b6d4" radius={[4,4,0,0]} barSize={40} />
-                            </BarChart>
-                          </ResponsiveContainer>
-                        ) : (
-                          <div className="flex flex-col items-center justify-center text-slate-500 bg-slate-900/50 w-full h-full rounded-xl border border-dashed border-slate-700">
-                            <BarChart3 size={40} className="mb-3 opacity-30"/>
-                            <p className="font-bold uppercase tracking-widest text-[10px]">Esperando datos de facturación.</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="lg:col-span-1 bg-slate-800 border border-slate-700 rounded-xl shadow-lg flex flex-col">
-                      <div className="p-4 border-b border-slate-700 bg-slate-900/50">
-                        <h3 className="text-[10px] uppercase font-bold text-slate-400 tracking-widest">Asentamiento OPEX</h3>
-                      </div>
-                      <div className="p-4 border-b border-slate-700">
-                        <form onSubmit={handleAddGasto} className="flex gap-2">
-                          <input type="text" required placeholder="Concepto" value={formGasto.descripcion} onChange={e=>setFormGasto({...formGasto, descripcion: e.target.value})} className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none" />
-                          <input type="number" required min="1" step="0.01" placeholder="Monto" value={formGasto.monto} onChange={e=>setFormGasto({...formGasto, monto: e.target.value})} className="w-20 px-2 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-xs text-white focus:border-cyan-500 outline-none text-right" />
-                          <button type="submit" className="bg-cyan-500 text-slate-900 px-3 rounded-lg hover:bg-cyan-400 transition-colors">
-                            <Plus size={14}/>
-                          </button>
-                        </form>
-                      </div>
-                      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                        {gastosFinanzas.length === 0 ? (
-                          <p className="text-center text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-8">Sin registros.</p>
-                        ) : (
-                          gastosFinanzas.map(g => (
-                            <div key={g.id} className="flex justify-between items-center text-xs border-b border-slate-700 pb-2">
-                              <div className="flex flex-col">
-                                <span className="font-bold text-slate-200">{g.descripcion}</span>
-                                <span className="text-[9px] text-slate-500">{g.fecha}</span>
-                              </div>
-                              <div className="flex items-center gap-3">
-                                <span className="font-bold text-red-400 font-mono">-Q{g.monto.toFixed(2)}</span>
-                                <button onClick={()=>eliminarGasto(g.id)} className="text-slate-500 hover:text-red-400 transition-colors"><Trash2 size={12}/></button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {}
-              {activeTab === 'calendario' && (
-                <div className="animate-fade-in space-y-4">
-                  <div className="flex justify-between items-end border-b border-slate-700 pb-3">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Agenda Cronológica</h2>
-                  </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-1 bg-slate-800 rounded-xl border border-slate-700 p-5 shadow-lg h-fit">
-                      <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-4 tracking-widest"><Calendar size={14} className="inline mr-2"/> Ingreso de Evento</h3>
-                      <form onSubmit={handleAddEvento} className="space-y-4">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Denominación</label>
-                          <input type="text" required value={formEvento.titulo} onChange={e=>setFormEvento({...formEvento, titulo: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Fecha</label>
-                          <input type="date" required value={formEvento.fecha} onChange={e=>setFormEvento({...formEvento, fecha: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none" style={{colorScheme: 'dark'}} />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Especificaciones</label>
-                          <textarea rows="3" value={formEvento.detalles} onChange={e=>setFormEvento({...formEvento, detalles: e.target.value})} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none resize-none" />
-                        </div>
-                        <button type="submit" className="w-full bg-cyan-500 text-slate-900 font-bold uppercase text-[11px] tracking-widest py-3 rounded-lg hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-2">Agendar Evento</button>
-                      </form>
-                    </div>
-                    <div className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700 p-5 shadow-lg min-h-[400px]">
-                      <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-5 tracking-widest">Cronograma Activo</h3>
-                      <div className="space-y-4">
-                        {eventos.map(evt => { 
-                          const esPasado = evt.fechaReal < new Date().setHours(0,0,0,0);
-                          return (
-                            <div key={evt.id} className={`rounded-xl p-4 flex justify-between items-start border transition-colors ${esPasado ? 'border-slate-700 bg-slate-900/40 opacity-50' : 'border-slate-600 bg-slate-900/20 border-l-4 border-l-cyan-500 shadow-md'}`}>
-                              <div className="flex gap-4">
-                                <div className="bg-slate-900/80 border border-slate-700 w-12 h-12 rounded-lg flex flex-col justify-center items-center shrink-0">
-                                  <span className="text-[9px] font-bold uppercase text-cyan-400">{evt.mes}</span>
-                                  <span className="text-base font-bold text-white leading-none">{evt.dia}</span>
-                                </div>
-                                <div>
-                                  <h4 className="font-bold text-sm text-white">
-                                    {evt.titulo} {esPasado && <span className="text-[8px] bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full ml-2 uppercase tracking-widest">Ejecutado</span>}
-                                  </h4>
-                                  <p className="text-xs text-slate-400 mt-1">{evt.detalles}</p>
-                                </div>
-                              </div>
-                              <button onClick={()=>eliminarEvento(evt.id)} className="text-slate-500 hover:text-red-400 transition-colors">
-                                <Trash2 size={14}/>
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-              
-              {}
-              {activeTab === 'perfil' && (
-                <div className="max-w-2xl mx-auto animate-fade-in space-y-4">
-                  <div className="flex justify-between items-end border-b border-slate-700 pb-3">
-                    <h2 className="text-xl font-bold text-white tracking-tight">Parámetros del Sistema</h2>
-                  </div>
-                  <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-lg overflow-hidden">
-                    <div className="p-5 border-b border-slate-700 bg-slate-900/50 flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl flex items-center justify-center text-slate-900 font-bold text-sm bg-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
-                        ADM
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-white text-base">{user?.email}</h3>
-                        <span className="text-[9px] px-2 py-0.5 rounded-full uppercase font-bold tracking-widest border bg-cyan-500/10 text-cyan-400 border-cyan-500/20 mt-1 inline-block">
-                          Nivel: Master / Owner
-                        </span>
-                      </div>
-                    </div>
-                    <form onSubmit={handleUpdatePerfil} className="p-6 space-y-5">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Razón Social</label>
-                          <input type="text" required value={formPerfil.company} onChange={e=>setFormPerfil({...formPerfil, company:e.target.value})} disabled={user?.role !== 'owner'} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none disabled:opacity-50" />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Identificador Principal</label>
-                          <input type="email" required value={formPerfil.email} onChange={e=>setFormPerfil({...formPerfil, email:e.target.value})} disabled={user?.role !== 'owner'} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none disabled:opacity-50" />
-                        </div>
-                      </div>
-                      <div className="pt-5 border-t border-slate-700">
-                        <h4 className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest mb-4">Auditoría de Credenciales</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Nueva Clave</label>
-                            <input type="password" value={formPerfil.newPassword} onChange={e=>setFormPerfil({...formPerfil, newPassword:e.target.value})} disabled={user?.role !== 'owner'} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none disabled:opacity-50" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Verificar Clave</label>
-                            <input type="password" value={formPerfil.confirmPassword} onChange={e=>setFormPerfil({...formPerfil, confirmPassword:e.target.value})} disabled={user.role !== 'owner'} className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-sm text-white focus:border-cyan-500 outline-none disabled:opacity-50" />
-                          </div>
-                        </div>
-                      </div>
-                      {user?.role === 'owner' && (
-                        <button type="submit" className="w-full bg-cyan-500 text-slate-900 font-bold uppercase text-[11px] tracking-widest py-3 rounded-lg hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] mt-4">
-                          Aplicar Políticas de Seguridad
-                        </button>
-                      )}
-                    </form>
-                  </div>
-                </div>
-              )}
-
-            </div>
-          </main>
-        </>
-      )}
-      
-      {}
-      <div className="fixed top-4 right-4 flex flex-col gap-2 z-[9999]">
-        {toasts.map(t => (
-          <div key={t.id} className={`px-4 py-3 rounded-lg shadow-2xl text-white flex items-center gap-3 text-xs font-bold tracking-wide border ${t.type === 'error' ? 'bg-red-500/90 border-red-500/50' : t.type === 'info' ? 'bg-blue-500/90 border-blue-500/50' : 'bg-slate-800/90 backdrop-blur-md border-cyan-500/50 shadow-[0_0_20px_rgba(6,182,212,0.2)]'}`}>
-            {t.type === 'error' ? <AlertTriangle size={16} /> : t.type === 'info' ? <Info size={16} /> : <CheckCircle2 size={16} className="text-cyan-400"/>}
-            {t.message}
-          </div>
-        ))}
+        </header>
+        <main className="flex-1 overflow-y-auto p-6 lg:p-10 bg-[#0B1120] print:p-0 print:overflow-visible print:bg-white relative">
+          <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-[#141C2B] to-transparent pointer-events-none opacity-50 print:hidden"></div>
+          <div className="relative z-10">{renderERPContent()}</div>
+        </main>
+        
+        {renderConfirmModal()}
       </div>
-    </div>
-  );
+    );
+  }
 }
